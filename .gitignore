@@ -1,0 +1,82 @@
+
+# =========================
+# Secrets and environment
+# =========================
+.env
+.env.*
+!.env.example
+!.env.template
+*.pem
+*.key
+secrets/
+credentials/
+
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# =========================
+# Node.js / frontend
+# =========================
+node_modules/
+dist/
+build/
+.vite/
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# =========================
+# Local databases and data
+# =========================
+data/
+mysql-data/
+database-data/
+*.sql
+*.sqlite
+*.sqlite3
+*.db
+
+# =========================
+# Local AI models
+# =========================
+models/
+ollama/
+*.gguf
+*.safetensors
+*.bin
+
+# =========================
+# Logs and temporary files
+# =========================
+logs/
+*.log
+tmp/
+temp/
+
+# =========================
+# OS and editors
+# =========================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# =========================
+# Local Docker overrides
+# =========================
+docker-compose.override.yml
+compose.override.yaml
