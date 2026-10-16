@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     mysql_user: str = "job_agent"
     mysql_password: str = ""
     ollama_url: str = "http://localhost:11434"
-    ollama_model: str = "qwen3:14b"
+    ollama_model: str = "qwen3:8b"
 
     model_config = SettingsConfigDict(case_sensitive=False, extra="ignore")
 
