@@ -18,7 +18,12 @@ engine = create_engine(
     pool_recycle=1800,
     echo=settings.app_env == "development",
 )
-SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+SessionLocal = sessionmaker(
+    bind=engine,
+    autoflush=False,
+    autocommit=False,
+)
 
 
 def get_db() -> Generator[Session, None, None]:
