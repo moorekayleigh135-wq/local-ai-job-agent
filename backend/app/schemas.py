@@ -23,20 +23,9 @@ class CandidateProfileData(BaseModel):
     years_experience: float | None = Field(default=None, ge=0, le=80)
     skills: list[str] = Field(default_factory=list, max_length=100)
     role_keywords: list[str] = Field(default_factory=list, max_length=20)
-    locations: list[str] = Field(default_factory=list, max_length=20)
-    work_arrangements: list[str] = Field(default_factory=list, max_length=3)
     experience: list[ExperienceItem] = Field(default_factory=list, max_length=30)
     education: list[EducationItem] = Field(default_factory=list, max_length=20)
     certifications: list[str] = Field(default_factory=list, max_length=50)
-
-    @field_validator("work_arrangements")
-    @classmethod
-    def validate_work_arrangements(cls, values: list[str]) -> list[str]:
-        cleaned = [value.strip().casefold() for value in values if value.strip()]
-        if any(value not in {"remote", "hybrid", "onsite"} for value in cleaned):
-            raise ValueError("Work arrangements must be remote, hybrid, or onsite.")
-        return list(dict.fromkeys(cleaned))
-
 
 class CandidateProfileRead(BaseModel):
     filename: str

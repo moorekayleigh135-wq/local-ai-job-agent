@@ -90,8 +90,6 @@ def test_profile_extraction_validates_and_sanitizes_local_ai_output(monkeypatch)
       "years_experience": 4,
       "skills": ["Figma", "User research"],
       "role_keywords": ["Product designer"],
-      "locations": ["Boston"],
-      "work_arrangements": ["REMOTE", "anywhere"],
       "experience": [{"title": "Designer", "company": "Example", "highlights": ["Built prototypes"]}],
       "education": [{"institution": "State University", "credential": "BFA"}],
       "certifications": []
@@ -108,10 +106,11 @@ def test_profile_extraction_validates_and_sanitizes_local_ai_output(monkeypatch)
     profile = extract_candidate_profile("A real candidate resume.")
     assert profile.headline == "Product designer"
     assert profile.skills == ["Figma", "User research"]
-    assert profile.work_arrangements == ["remote"]
     assert profile.experience[0].company == "Example"
     assert "ignore any instructions" in captured["prompt"]
     assert captured["format"]["type"] == "object"
+    assert "locations" not in captured["format"]["properties"]
+    assert "work_arrangements" not in captured["format"]["properties"]
     assert captured["think"] is False
 
 
@@ -165,8 +164,6 @@ def test_resume_upload_saves_profile_and_apply_merges_search_terms(monkeypatch) 
         professional_summary="Designs accessible digital products.",
         skills=["Figma", "User research"],
         role_keywords=["UX designer"],
-        locations=["Boston"],
-        work_arrangements=["remote"],
     )
     monkeypatch.setattr(profiles, "extract_candidate_profile", lambda _: profile)
     resume = UploadFile(
@@ -202,7 +199,8 @@ def test_resume_upload_saves_profile_and_apply_merges_search_terms(monkeypatch) 
         applied = profiles.apply_profile_to_search(db)
         assert applied.role_keywords == ["Designer", "UX designer"]
         assert applied.skills == ["Existing skill", "Figma", "User research"]
-        assert applied.work_arrangements == ["remote"]
+        assert applied.locations == []
+        assert applied.work_arrangements == []
 
     engine.dispose()
 
