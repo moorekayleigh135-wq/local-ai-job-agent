@@ -26,7 +26,8 @@ a { color: var(--jmu-purple); }
 .app-sidebar a { color: var(--muted); text-decoration: none; display: flex; align-items: center; gap: 10px; padding: 10px; border-radius: 9px; font-size: 12px; font-weight: 650; }
 .app-sidebar a:hover, .app-sidebar a[aria-current="page"] { color: var(--jmu-purple); background: var(--mint); }
 .app-sidebar svg { width: 17px; height: 17px; flex: 0 0 17px; stroke: currentColor; stroke-width: 1.8; fill: none; }
-body.with-app-sidebar { padding-left: 230px; }
+body.with-app-sidebar { padding: 0 0 0 230px; }
+.with-app-sidebar .shell { max-width: 1240px; width: 100%; margin: 0 auto; padding: 36px 42px 60px; }
 .nav a.active { color: var(--jmu-purple); background: var(--mint); }
 .primary-btn, .button, .scan-btn, .mark, .brand-mark {
   background-color: var(--jmu-purple);
@@ -134,6 +135,7 @@ a:focus-visible, input:focus-visible, textarea:focus-visible {
 :root[data-theme="dark"] .app-sidebar { background: var(--paper); border-color: var(--line); }
 @media (max-width: 900px) {
   body.with-app-sidebar { padding: 12px; }
+  .with-app-sidebar .shell { margin: 0 auto; padding: 25px 18px 40px; }
   .app-sidebar { position: static; width: auto; max-height: none; overflow: visible; padding: 10px; margin-bottom: 14px; border: 1px solid var(--line); border-radius: 12px; }
   .app-sidebar .app-brand { display: flex; padding: 0 5px 10px; }
   .app-sidebar nav { display: flex; gap: 2px; overflow-x: auto; }
