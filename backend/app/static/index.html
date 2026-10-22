@@ -16,20 +16,20 @@
   <script src="/assets/theme.js"></script>
   <link rel="stylesheet" href="/assets/theme.css">
 </head>
-<body>
+<body class="with-app-sidebar">
+  <aside class="app-sidebar" aria-label="Main navigation"><div class="app-brand"><span class="app-brand-mark" aria-hidden="true">JH</span>JobHarbor</div><nav>
+    <a href="/" aria-current="page"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="8" rx="2"/><rect x="14" y="3" width="7" height="5" rx="2"/><rect x="14" y="11" width="7" height="10" rx="2"/><rect x="3" y="14" width="8" height="7" rx="2"/></svg>Overview</a>
+    <a href="/opportunities"><svg viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="14" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M3 12h18M10 12v2h4v-2"/></svg>Opportunities</a>
+    <a href="/assets/profile.html"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>Career profile</a>
+    <a href="/assets/scanner.html"><svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5"/></svg>Company search</a>
+    <a href="/notifications"><svg viewBox="0 0 24 24"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>Alerts</a>
+    <a href="/account"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>Account</a>
+    <a href="/settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="m19 13 2 1-2 4-2-1-2 1v2h-5v-2l-2-1-2-1-2-4 2-1v-2l-2-1 2-4 2 1 2-1V4h5v2l2 1 2-1 2 4-2 1z"/></svg>Settings</a>
+  </nav></aside>
   <div class="shell">
-    <aside class="sidebar">
-      <div class="brand"><span class="brand-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 16.5 10.5 5l3.2 6 2-3.5L21 18H4"/><path d="M7 18h13"/></svg></span>JobHarbor</div>
-      <div class="workspace-label">Workspace</div>
-      <div class="workspace"><i class="workspace-dot"></i><div><strong>Personal search</strong><small>Private workspace</small></div></div>
-      <div class="nav-caption">Workspace</div>
-      <nav class="nav"><a class="active" href="/"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="8" rx="2"/><rect x="14" y="3" width="7" height="5" rx="2"/><rect x="14" y="11" width="7" height="10" rx="2"/><rect x="3" y="14" width="8" height="7" rx="2"/></svg>Overview</a><a href="/opportunities"><svg viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="14" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M3 12h18M10 12v2h4v-2"/></svg>Opportunities</a><a href="/assets/profile.html"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>Career profile</a><a href="/assets/scanner.html"><svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5M10.5 7v7m-3.5-3.5h7"/></svg>Company search</a><a href="/notifications"><svg viewBox="0 0 24 24"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>Alerts</a><a href="/account"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>Account</a><a href="/settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="m19.4 15 .1.1 1.4 1.1-1.4 2.4-1.7-.7a8 8 0 0 1-1.7 1l-.3 1.8h-2.8l-.3-1.8a8 8 0 0 1-1.7-1l-1.7.7-1.4-2.4 1.4-1.1a7 7 0 0 1 0-2l-1.4-1.1 1.4-2.4 1.7.7a8 8 0 0 1 1.7-1l.3-1.8h2.8l.3 1.8a8 8 0 0 1 1.7 1l1.7-.7 1.4 2.4-1.4 1.1a7 7 0 0 1 0 2Z" transform="translate(-2 -1)"/></svg>Settings</a></nav>
-      <div class="nav-caption">Your setup</div>
-      <div class="side-note"><div class="side-note-head"><svg class="lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3m-4 4v3"/></svg>Your data stays yours</div><p>Job descriptions and extracted details live in your private, self-hosted workspace.</p></div>
-    </aside>
+
     <main class="main" id="home">
-      <header class="topbar"><div class="crumb">Workspace <span> / </span> <b>Overview</b></div><div class="top-actions"><div class="live-pill"><i></i>Local workspace</div><a href="/notifications" style="color:inherit;text-decoration:none;font-size:12px">Alerts <span id="alert-count"></span></a><a href="/account" style="color:inherit;text-decoration:none;font-size:12px">Account</a><div class="avatar">J</div></div></header>
-      <section class="intro"><div><div class="eyebrow">Your next move, organized</div><h1>Good work starts here.</h1><p>Your private command center for discovering what comes next.</p></div><div class="date-label" id="today"></div></section>
+      <div class="page-context">Workspace <span>/</span> Overview</div><section class="page-heading"><h1>Overview</h1><p>Track saved roles, company coverage, and the health of your local job-search workspace.</p></section>
       <section class="metrics" aria-label="Workspace summary">
         <article class="metric"><div class="metric-top">Saved opportunities <span class="metric-icon"><svg viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="14" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></span></div><strong id="stat-total">—</strong></article>
         <article class="metric"><div class="metric-top">Companies <span class="metric-icon"><svg viewBox="0 0 24 24"><path d="M3 21h18M5 21V6l7-3v18m7 0V10l-7-4"/><path d="M8 8h1m-1 4h1m-1 4h1m7-4h1m-1 4h1"/></svg></span></div><strong id="stat-companies">—</strong></article>

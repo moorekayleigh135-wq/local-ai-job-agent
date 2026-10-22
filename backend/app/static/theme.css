@@ -27,7 +27,15 @@ a { color: var(--jmu-purple); }
 .app-sidebar a:hover, .app-sidebar a[aria-current="page"] { color: var(--jmu-purple); background: var(--mint); }
 .app-sidebar svg { width: 17px; height: 17px; flex: 0 0 17px; stroke: currentColor; stroke-width: 1.8; fill: none; }
 body.with-app-sidebar { padding: 0 0 0 230px; }
-.with-app-sidebar .shell { max-width: 1240px; width: 100%; margin: 0 auto; padding: 36px 42px 60px; }
+.with-app-sidebar > .shell { display: block; min-height: 0; max-width: none; width: 100%; margin: 0 auto; padding: 0; }
+.with-app-sidebar > .shell > .main,
+.with-app-sidebar > main.shell,
+.with-app-sidebar > .opportunities-main { max-width: 1240px; width: 100%; margin: 0 auto; padding: 36px 42px 60px; }
+.page-context { color: var(--muted); font-size: 12px; margin: 0 0 26px; }
+.page-context span { margin: 0 6px; color: var(--muted); }
+.page-heading { margin: 0 0 26px; }
+.page-heading h1 { color: var(--ink); font: 700 clamp(28px, 3.2vw, 39px)/1.15 Manrope, Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: -1.25px; margin: 0; }
+.page-heading p { color: var(--muted); font-size: 13px; line-height: 1.6; margin: 9px 0 0; max-width: 700px; }
 .nav a.active { color: var(--jmu-purple); background: var(--mint); }
 .primary-btn, .button, .scan-btn, .mark, .brand-mark {
   background-color: var(--jmu-purple);
@@ -135,7 +143,10 @@ a:focus-visible, input:focus-visible, textarea:focus-visible {
 :root[data-theme="dark"] .app-sidebar { background: var(--paper); border-color: var(--line); }
 @media (max-width: 900px) {
   body.with-app-sidebar { padding: 12px; }
-  .with-app-sidebar .shell { margin: 0 auto; padding: 25px 18px 40px; }
+  .with-app-sidebar > .shell > .main,
+  .with-app-sidebar > main.shell,
+  .with-app-sidebar > .opportunities-main { margin: 0 auto; padding: 25px 18px 40px; }
+  .page-context { margin-bottom: 22px; }
   .app-sidebar { position: static; width: auto; max-height: none; overflow: visible; padding: 10px; margin-bottom: 14px; border: 1px solid var(--line); border-radius: 12px; }
   .app-sidebar .app-brand { display: flex; padding: 0 5px 10px; }
   .app-sidebar nav { display: flex; gap: 2px; overflow-x: auto; }
