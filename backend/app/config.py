@@ -12,9 +12,11 @@ class Settings(BaseSettings):
     mysql_user: str = "job_agent"
     mysql_password: str = ""
     profile_encryption_key: str = ""
+    brave_search_api_key: str = ""
     ollama_url: str = "http://localhost:11434"
     ollama_model: str = "qwen3:8b"
     scan_interval_minutes: int = Field(default=60, ge=15, le=1440)
+    company_discovery_interval_hours: int = Field(default=24, ge=6, le=168)
     new_job_window_hours: int = Field(default=48, ge=1, le=168)
     vapid_public_key: str = ""
     vapid_private_key: str = ""

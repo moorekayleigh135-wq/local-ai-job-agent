@@ -4,15 +4,17 @@ from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.career_scanner import ScanError, scan_career_site
+from app.company_discovery import CompanyDiscoveryError, discover_company_sites
 from app.config import settings
-from app.database import get_db
+from app.database import SessionLocal, get_db
 from app.models import (
-    BrowserPushSubscription, CareerSite, Job, JobNotification, JobScanMatch,
+    BrowserPushSubscription, CareerSite, CompanyDiscoveryState,
+    DiscoveredCareerSite, Job, JobNotification, JobScanMatch,
     NotificationSettings, SearchPreferences,
 )
 from app.push_notifications import endpoint_digest, push_is_configured, send_job_alert
@@ -22,6 +24,8 @@ from app.schemas import (
     BrowserPushSubscriptionSaved,
     CareerSiteCreate,
     CareerSiteRead,
+    CompanyDiscoveryRead,
+    DiscoveredCareerSiteRead,
     ScanSummary,
     JobNotificationRead,
     ScannedJobRead,
@@ -34,6 +38,102 @@ from app.schemas import (
 
 router = APIRouter(prefix="/scanner", tags=["company scanner"])
 DatabaseSession = Annotated[Session, Depends(get_db)]
+
+
+def _discovery_response(db: Session, message: str | None = None) -> CompanyDiscoveryRead:
+    state = db.get(CompanyDiscoveryState, 1)
+    suggestions = db.scalars(
+        select(DiscoveredCareerSite)
+        .where(DiscoveredCareerSite.dismissed.is_(False))
+        .order_by(DiscoveredCareerSite.discovered_at.desc())
+        .limit(50)
+    ).all()
+    return CompanyDiscoveryRead(
+        enabled=bool(settings.brave_search_api_key),
+        interval_hours=settings.company_discovery_interval_hours,
+        last_run_at=state.last_run_at if state else None,
+        message=message,
+        last_error=state.last_error if state else None,
+        suggestions=[DiscoveredCareerSiteRead.model_validate(item, from_attributes=True) for item in suggestions],
+    )
+
+
+def _run_company_discovery(db: Session) -> CompanyDiscoveryRead:
+    if not settings.brave_search_api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="Company discovery is not configured. Add BRAVE_SEARCH_API_KEY to your .env file.",
+        )
+    preferences = db.get(SearchPreferences, 1)
+    if preferences is None or not preferences.role_keywords:
+        raise HTTPException(status_code=400, detail="Save at least one target role before discovering companies.")
+
+    state = db.get(CompanyDiscoveryState, 1)
+    if state is None:
+        state = CompanyDiscoveryState(id=1)
+        db.add(state)
+    state.last_run_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    state.last_error = None
+    db.commit()
+
+    try:
+        results = discover_company_sites(preferences.role_keywords, preferences.locations)
+    except CompanyDiscoveryError as exc:
+        state.last_error = str(exc)
+        db.commit()
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    watched_urls = {
+        site.url.rstrip("/").casefold()
+        for site in db.scalars(select(CareerSite)).all()
+    }
+    for item in results:
+        url = item["url"].rstrip("/")
+        if url.casefold() in watched_urls:
+            continue
+        candidate = db.scalar(select(DiscoveredCareerSite).where(DiscoveredCareerSite.url == url))
+        if candidate is None:
+            candidate = DiscoveredCareerSite(url=url, name=item["name"], description=item["description"])
+            db.add(candidate)
+        else:
+            if candidate.dismissed:
+                continue
+            candidate.name = item["name"]
+            candidate.description = item["description"]
+            candidate.discovered_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    db.execute(
+        delete(DiscoveredCareerSite).where(
+            DiscoveredCareerSite.discovered_at
+            < datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=30)
+        )
+    )
+    db.commit()
+    return _discovery_response(db, "Company suggestions refreshed.")
+
+
+def run_scheduled_company_discovery() -> None:
+    """Refresh employer suggestions once per configured interval."""
+    if not settings.brave_search_api_key:
+        return
+    with SessionLocal() as db:
+        preferences = db.get(SearchPreferences, 1)
+        if preferences is None or not preferences.role_keywords:
+            return
+        state = db.get(CompanyDiscoveryState, 1)
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        if state is not None and state.last_run_at is not None:
+            elapsed = now - state.last_run_at
+            # Failed provider calls get a short retry window; successful searches
+            # use the configured discovery interval to keep API usage predictable.
+            interval_hours = 1 if state.last_error else settings.company_discovery_interval_hours
+            if elapsed.total_seconds() < interval_hours * 3600:
+                return
+        try:
+            _run_company_discovery(db)
+        except HTTPException as exc:
+            if exc.status_code == 503:
+                return
+            raise
 
 
 @router.get("/status")
@@ -121,6 +221,43 @@ def recommendation_tip_for_score(score: int) -> str:
 @router.get("/companies", response_model=list[CareerSiteRead])
 def list_companies(db: DatabaseSession) -> list[CareerSite]:
     return list(db.scalars(select(CareerSite).order_by(CareerSite.name)).all())
+
+
+@router.get("/discovery", response_model=CompanyDiscoveryRead)
+def get_company_discovery(db: DatabaseSession) -> CompanyDiscoveryRead:
+    message = None
+    if not settings.brave_search_api_key:
+        message = "Add BRAVE_SEARCH_API_KEY to .env to enable automatic company discovery."
+    return _discovery_response(db, message)
+
+
+@router.post("/discovery/run", response_model=CompanyDiscoveryRead)
+def discover_companies_now(db: DatabaseSession) -> CompanyDiscoveryRead:
+    return _run_company_discovery(db)
+
+
+@router.post("/discovery/{suggestion_id}/monitor", response_model=CareerSiteRead)
+def monitor_discovered_company(suggestion_id: int, db: DatabaseSession) -> CareerSiteRead:
+    suggestion = db.get(DiscoveredCareerSite, suggestion_id)
+    if suggestion is None:
+        raise HTTPException(status_code=404, detail="Company suggestion not found.")
+    site = db.scalar(select(CareerSite).where(CareerSite.url == suggestion.url))
+    if site is None:
+        site = CareerSite(name=suggestion.name[:120], url=suggestion.url[:512])
+        db.add(site)
+    db.delete(suggestion)
+    db.commit()
+    db.refresh(site)
+    return site
+
+
+@router.delete("/discovery/{suggestion_id}", status_code=status.HTTP_204_NO_CONTENT)
+def dismiss_discovered_company(suggestion_id: int, db: DatabaseSession) -> Response:
+    suggestion = db.get(DiscoveredCareerSite, suggestion_id)
+    if suggestion is not None:
+        suggestion.dismissed = True
+        db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/companies", response_model=CareerSiteRead, status_code=status.HTTP_201_CREATED)

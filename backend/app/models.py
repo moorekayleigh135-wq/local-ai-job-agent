@@ -1,7 +1,7 @@
 """SQLAlchemy models for job postings."""
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -70,6 +70,32 @@ class CareerSite(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
     )
+
+
+class DiscoveredCareerSite(Base):
+    """Public career-page suggestions awaiting the user's monitoring choice."""
+
+    __tablename__ = "discovered_career_sites"
+    __table_args__ = (UniqueConstraint("url", name="uq_discovered_career_site_url"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    dismissed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    discovered_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+
+
+class CompanyDiscoveryState(Base):
+    """Last automatic company discovery run for this single-user installation."""
+
+    __tablename__ = "company_discovery_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime)
+    last_error: Mapped[str | None] = mapped_column(String(400))
 
 
 class SearchPreferences(Base):

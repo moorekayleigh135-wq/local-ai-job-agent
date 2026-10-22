@@ -78,6 +78,25 @@ class CareerSiteRead(BaseModel):
     created_at: datetime
 
 
+class DiscoveredCareerSiteRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    url: str
+    description: str
+    discovered_at: datetime
+
+
+class CompanyDiscoveryRead(BaseModel):
+    enabled: bool
+    interval_hours: int
+    last_run_at: datetime | None
+    message: str | None = None
+    last_error: str | None = None
+    suggestions: list[DiscoveredCareerSiteRead] = Field(default_factory=list)
+
+
 class SearchPreferencesUpdate(BaseModel):
     role_keywords: list[str] = Field(default_factory=list, max_length=20)
     locations: list[str] = Field(default_factory=list, max_length=20)

@@ -9,13 +9,14 @@ from sqlalchemy import select
 from app.config import settings
 from app.database import SessionLocal
 from app.models import CareerSite, NotificationSettings, SearchPreferences
-from app.scans import scan_company
+from app.scans import run_scheduled_company_discovery, scan_company
 
 logger = logging.getLogger(__name__)
 
 
 def run_scheduled_scans() -> None:
     """Scan saved companies one at a time and persist any new job alerts."""
+    run_scheduled_company_discovery()
     with SessionLocal() as db:
         preferences = db.get(SearchPreferences, 1)
         if preferences is None or not any(
