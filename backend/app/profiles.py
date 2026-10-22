@@ -1,6 +1,5 @@
 """Private resume upload and candidate profile endpoints."""
 
-import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
@@ -8,6 +7,7 @@ from app.database import get_db
 from app.models import CandidateProfile, SearchPreferences
 from app.resume_profiles import (
     MAX_RESUME_BYTES,
+    ProfileBuildError,
     ResumeError,
     extract_candidate_profile,
     extract_resume_text,
@@ -54,10 +54,10 @@ def upload_resume(
 
     try:
         profile = extract_candidate_profile(resume_text)
-    except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+    except ProfileBuildError as exc:
         raise HTTPException(
             status_code=502,
-            detail="The local AI could not build a profile from this resume. Try again or use a text-based file.",
+            detail=str(exc),
         ) from exc
 
     record = db.get(CandidateProfile, 1)

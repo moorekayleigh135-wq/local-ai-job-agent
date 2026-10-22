@@ -29,6 +29,10 @@ class ResumeError(ValueError):
     """The uploaded resume cannot be safely or reliably processed."""
 
 
+class ProfileBuildError(ValueError):
+    """The local model could not return a usable profile."""
+
+
 def safe_filename(filename: str | None) -> str:
     """Keep only a short display name, never a user-provided filesystem path."""
     cleaned = (filename or "resume").replace("\\", "/").split("/")[-1]
@@ -159,22 +163,53 @@ RESUME TEXT:
 {resume_text}
 </resume>
 """
-    response = httpx.post(
-        f"{settings.ollama_url.rstrip('/')}/api/generate",
-        json={
-            "model": settings.ollama_model,
-            "prompt": prompt,
-            "format": "json",
-            "stream": False,
-            "options": {"temperature": 0},
-        },
-        timeout=180.0,
-    )
-    response.raise_for_status()
-    result = response.json()
-    raw_profile = json.loads(result["response"])
+    try:
+        response = httpx.post(
+            f"{settings.ollama_url.rstrip('/')}/api/generate",
+            json={
+                "model": settings.ollama_model,
+                "prompt": prompt,
+                "format": "json",
+                "stream": False,
+                "options": {"temperature": 0},
+            },
+            timeout=180.0,
+        )
+        response.raise_for_status()
+    except httpx.TimeoutException as exc:
+        raise ProfileBuildError(
+            "The local AI took too long to read this resume. Try again, or check that Ollama has enough memory."
+        ) from exc
+    except httpx.ConnectError as exc:
+        raise ProfileBuildError(
+            "Could not connect to local Ollama. Start the Ollama service, then try again."
+        ) from exc
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
+            raise ProfileBuildError(
+                f"The configured Ollama model '{settings.ollama_model}' is not installed. "
+                "In your project folder, run `docker compose exec ollama ollama pull "
+                f"{settings.ollama_model}`, then try again."
+            ) from exc
+        raise ProfileBuildError(
+            "Ollama could not process this resume. Check the local AI service and try again."
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise ProfileBuildError(
+            "Could not reach local Ollama. Check the local AI service and try again."
+        ) from exc
+
+    try:
+        result = response.json()
+        raw_profile = json.loads(result["response"])
+    except (ValueError, KeyError, TypeError) as exc:
+        raise ProfileBuildError(
+            "The local AI returned an unreadable profile. Try building the profile again."
+        ) from exc
     if not isinstance(raw_profile, dict):
-        raise ValueError("The model did not return a profile object.")
+        raise ProfileBuildError(
+            "The local AI returned an unreadable profile. Try building the profile again."
+        )
 
     # Keep malformed or overly verbose model output within the response schema.
     for key, limit in {
@@ -223,4 +258,9 @@ RESUME TEXT:
         raw_profile[key] = value.strip()[:limit] if isinstance(value, str) and value.strip() else None
     years = raw_profile.get("years_experience")
     raw_profile["years_experience"] = years if isinstance(years, (int, float)) and not isinstance(years, bool) else None
-    return CandidateProfileData.model_validate(raw_profile)
+    try:
+        return CandidateProfileData.model_validate(raw_profile)
+    except ValueError as exc:
+        raise ProfileBuildError(
+            "The local AI returned profile details in an unexpected format. Try again."
+        ) from exc
