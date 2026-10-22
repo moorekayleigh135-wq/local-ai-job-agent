@@ -30,15 +30,15 @@ The stack targets **Linux Mint**, **Docker Engine**, an **NVIDIA RTX 4080 / 4080
 ## Architecture
 
 ```text
-Local browser
-    | 127.0.0.1:8000
-    v
-FastAPI API --------> Ollama (local inference)
-    |
-    v
-MySQL 8.4
-
-Private remote dashboard access via Tailscale is a later milestone.
+Local browser ------------------------┐
+    | 127.0.0.1:8000                 |
+    v                                |
+FastAPI API --------> Ollama         | (optional)
+    |                                |
+    v                                v
+MySQL 8.4                  Tailscale Serve (HTTPS, tailnet only)
+                                     ^
+Remote browser with Tailscale -------┘
 ```
 
 Services:
@@ -136,7 +136,22 @@ Interactive API docs are available at <http://127.0.0.1:8000/docs> only when `AP
 
 Use the **Settings** page to choose light or dark theme, set the saved-company scan frequency (15 minutes to 24 hours), cap new alerts per day (1–100), and choose the minimum match percentage. Scan and match controls are stored in the local database; the theme setting is kept in the current browser. Once the daily alert cap is reached, scanning and job discovery continue, but new notifications wait until the next day.
 
-Visit <http://127.0.0.1:8000/> on the Mint machine. The first visit opens account setup; create the local user and a password of at least 12 characters. Later visits require that username and password. The account page includes password change and sign out. This build has one account because its profile and job workspace are single-user; adding multiple accounts would require per-user data separation. After signing in, paste a job description, extract structured details with your local Ollama model, and review saved opportunities. Open **Career profile** to upload a PDF, DOCX, or TXT resume (up to 10 MB) and build a structured profile using local Ollama. The uploaded file is not retained; the extracted career profile is encrypted in MySQL. Search preferences and match terms are encrypted too. You can choose **Use in company search** to add resume-derived roles and skills to your scanner profile. Location and work-style preferences remain separate controls on **Company search**. With a Brave Search API key configured, Company Search discovers employer career pages from your role and location preferences after saving them, then refreshes suggestions daily. Choose **Monitor this site** to add a suggestion to the monitored website list; only monitored sites are scanned automatically. The Brave Search provider receives role and location terms, never the resume. You can also add career-page URLs directly. The server scans monitored pages automatically on startup and about once per `SCAN_INTERVAL_MINUTES` (default 60, minimum 15). It checks `robots.txt`, stays on the submitted host, prioritizes structured listings with recent `datePosted` values, and reads at most 10 job-detail pages per company each cycle. It reads HTML and embedded JSON/JavaScript data without executing site scripts. Pages that disallow access, require a redirect, or link to another host are skipped; use the company's direct hosted ATS page where possible. When a source exposes `datePosted`, alerts are limited to postings inside `NEW_JOB_WINDOW_HOURS` (default 48); otherwise, the app can only say when it first detected a listing. Set the minimum match score to filter recommendations. Scores describe weighted keyword coverage, not a hiring probability: 80%+ strong match, 60–79% good match, and below 60% potential match. The local **Alerts** inbox remains available even when push is off. To receive phone and desktop push while the page is closed, open Alerts on each device over HTTPS and select **Enable phone & desktop alerts**. Each device must grant permission. Web Push encrypts alert contents for the device; push providers can see the subscription endpoint and delivery timing. The VAPID private key and browser subscription are encrypted in MySQL. On iPhone/iPad, add the site to the Home Screen to enable Web Push. The default loopback address is for the Mint machine; phone access requires a private HTTPS route such as Tailscale, which is a later machine setup step. Automatic checks reduce detection delay but cannot guarantee a specific application rank or cover pages that require executing remote scripts. Job descriptions must be at least 30 characters. The dashboard works without downloading external fonts.
+Visit <http://127.0.0.1:8000/> on the Mint machine. The first visit opens account setup; create the local user and a password of at least 12 characters. Later visits require that username and password. The account page includes password change and sign out. This build has one account because its profile and job workspace are single-user; adding multiple accounts would require per-user data separation. After signing in, paste a job description, extract structured details with your local Ollama model, and review saved opportunities. Open **Career profile** to upload a PDF, DOCX, or TXT resume (up to 10 MB) and build a structured profile using local Ollama. The uploaded file is not retained; the extracted career profile is encrypted in MySQL. Search preferences and match terms are encrypted too. You can choose **Use in company search** to add resume-derived roles and skills to your scanner profile. Location and work-style preferences remain separate controls on **Company search**. With a Brave Search API key configured, Company Search discovers employer career pages from your role and location preferences after saving them, then refreshes suggestions daily. Choose **Monitor this site** to add a suggestion to the monitored website list; only monitored sites are scanned automatically. The Brave Search provider receives role and location terms, never the resume. You can also add career-page URLs directly. The server scans monitored pages automatically on startup and about once per `SCAN_INTERVAL_MINUTES` (default 60, minimum 15). It checks `robots.txt`, stays on the submitted host, prioritizes structured listings with recent `datePosted` values, and reads at most 10 job-detail pages per company each cycle. It reads HTML and embedded JSON/JavaScript data without executing site scripts. Pages that disallow access, require a redirect, or link to another host are skipped; use the company's direct hosted ATS page where possible. When a source exposes `datePosted`, alerts are limited to postings inside `NEW_JOB_WINDOW_HOURS` (default 48); otherwise, the app can only say when it first detected a listing. Set the minimum match score to filter recommendations. Scores describe weighted keyword coverage, not a hiring probability: 80%+ strong match, 60–79% good match, and below 60% potential match. The local **Alerts** inbox remains available even when push is off. To receive phone and desktop push while the page is closed, open Alerts on each device over HTTPS and select **Enable phone & desktop alerts**. Each device must grant permission. Web Push encrypts alert contents for the device; push providers can see the subscription endpoint and delivery timing. The VAPID private key and browser subscription are encrypted in MySQL. On iPhone/iPad, add the site to the Home Screen to enable Web Push. The default loopback address is for the Mint machine; phone access requires the private Tailscale setup described below. Automatic checks reduce detection delay but cannot guarantee a specific application rank or cover pages that require executing remote scripts. Job descriptions must be at least 30 characters. The dashboard works without downloading external fonts.
+
+### 6. Optional private access from your phone with Tailscale
+
+Tailscale Serve gives devices on your tailnet an HTTPS address for the dashboard without publishing the API port to your LAN or the public internet. Install Tailscale on the Linux Mint host and on each device that should connect, then sign them in to the same tailnet. Follow the [official Linux installation guide](https://tailscale.com/docs/install/linux).
+
+Create the JobHarbor account on the Mint machine at <http://127.0.0.1:8000/> before enabling remote access. This is a single-user app; anyone who can sign in uses the same account and workspace. Only connect trusted devices and keep the app password private.
+
+In the [Tailscale admin console](https://login.tailscale.com/admin/dns), enable **MagicDNS** and **HTTPS certificates**. Then, on the Mint host, run:
+
+```bash
+sudo tailscale serve --bg http://127.0.0.1:8000
+sudo tailscale serve status
+```
+
+Open the HTTPS address printed by Tailscale on the host and on a phone that is connected to the same tailnet. The background Serve configuration persists across host restarts while Tailscale is running. Tailscale Serve is tailnet-only; do not use Tailscale Funnel for this private dashboard. Enabling HTTPS certificates publishes the device and tailnet DNS names to the public Certificate Transparency log, but does not make the dashboard itself public. Avoid sensitive information in the machine name. See [Tailscale HTTPS certificate details](https://tailscale.com/docs/how-to/set-up-https-certificates) and the [`tailscale serve` reference](https://tailscale.com/docs/reference/tailscale-cli/serve).
 
 ## Useful commands
 
