@@ -80,7 +80,9 @@ class DiscoveredCareerSite(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    # Keep the unique utf8mb4 index within MySQL's 3072-byte key limit.
+    # Discovery results are already capped at 512 characters before storage.
+    url: Mapped[str] = mapped_column(String(512), nullable=False)
     description: Mapped[str] = mapped_column(Text, default="", nullable=False)
     dismissed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     discovered_at: Mapped[datetime] = mapped_column(
