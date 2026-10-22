@@ -32,7 +32,19 @@ services:
       # Local-only troubleshooting/API access; not exposed to the LAN.
       - "127.0.0.1:11434:11434"
     # Requires a working NVIDIA host driver and NVIDIA Container Toolkit.
-    gpus: all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
   api:
     build:
@@ -45,17 +57,25 @@ services:
       MYSQL_DATABASE: ${MYSQL_DATABASE:?Set MYSQL_DATABASE in .env}
       MYSQL_USER: ${MYSQL_USER:?Set MYSQL_USER in .env}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
+      PROFILE_ENCRYPTION_KEY: ${PROFILE_ENCRYPTION_KEY:?Set PROFILE_ENCRYPTION_KEY in .env}
       OLLAMA_URL: http://ollama:11434
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:14b}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:8b}
     depends_on:
       db:
         condition: service_healthy
       ollama:
-        condition: service_started
+        condition: service_healthy
     ports:
       - "127.0.0.1:${API_PORT:-8000}:8000"
     networks:
       - agent_network
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
       interval: 15s

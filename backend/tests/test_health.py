@@ -1,17 +1,13 @@
-from fastapi.testclient import TestClient
+from pathlib import Path
 
-from app.main import app
-
-client = TestClient(app)
+from app.main import dashboard, health
 
 
-def test_root_returns_service_name() -> None:
-    response = client.get("/")
-    assert response.status_code == 200
-    assert response.json()["name"] == "Local AI Job Agent API"
+def test_root_serves_dashboard() -> None:
+    response = dashboard()
+    assert response.media_type == "text/html"
+    assert "Good work starts here." in Path(response.path).read_text(encoding="utf-8")
 
 
 def test_health_is_healthy() -> None:
-    response = client.get("/health")
-    assert response.status_code == 200
-    assert response.json() == {"status": "healthy"}
+    assert health() == {"status": "healthy"}

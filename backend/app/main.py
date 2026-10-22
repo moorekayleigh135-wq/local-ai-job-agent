@@ -1,37 +1,133 @@
-"""FastAPI entry point for the Local AI Job Agent."""
+"""FastAPI entry point for JobHarbor, a local AI job-search assistant."""
 
 from contextlib import asynccontextmanager
+from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from app import models  # Register SQLAlchemy models before create_all().
 from app.config import settings
-from app.database import Base, check_database_connection, engine
+from app.auth import account_for_token, router as auth_router, COOKIE_NAME
+from app.database import Base, SessionLocal, check_database_connection, engine, migrate_legacy_personal_data
+from app.security import validate_encryption_key
 from app.jobs import router as jobs_router
+from app.profiles import router as profiles_router
+from app.scans import router as scans_router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize database tables when the API starts."""
+    validate_encryption_key()
     Base.metadata.create_all(bind=engine)
+    migrate_legacy_personal_data()
     yield
 
 
+production = settings.app_env.casefold() == "production"
 app = FastAPI(
-    title="Local AI Job Agent API",
+    title="JobHarbor API",
     description="Private API for a local-first AI job-search assistant.",
     version="0.1.0",
     lifespan=lifespan,
+    docs_url=None if production else "/docs",
+    redoc_url=None if production else "/redoc",
+    openapi_url=None if production else "/openapi.json",
 )
 
+PUBLIC_PATHS = {
+    "/login",
+    "/auth/status",
+    "/auth/register",
+    "/auth/login",
+    "/health",
+    "/health/db",
+    "/health/ollama",
+    "/api",
+}
+PRIVATE_UI_PATHS = {"/", "/account", "/assets/index.html", "/assets/profile.html", "/assets/scanner.html"}
+
+
+@app.middleware("http")
+async def local_security_headers(request: Request, call_next):
+    """Add browser protections and reject cross-origin browser mutations."""
+    response = None
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        source = request.headers.get("origin") or request.headers.get("referer")
+        if source:
+            try:
+                parsed = urlsplit(source)
+                expected_host = request.headers.get("host", "").casefold()
+                same_origin = (
+                    parsed.scheme == request.url.scheme
+                    and parsed.netloc.casefold() == expected_host
+                )
+            except ValueError:
+                same_origin = False
+            if not same_origin:
+                response = JSONResponse(
+                    {"detail": "Cross-origin request rejected."}, status_code=403
+                )
+
+    if response is None and request.url.path not in PUBLIC_PATHS:
+        with SessionLocal() as db:
+            account = account_for_token(db, request.cookies.get(COOKIE_NAME))
+        if account is None:
+            if request.url.path in PRIVATE_UI_PATHS:
+                response = RedirectResponse("/login", status_code=303)
+            else:
+                response = JSONResponse({"detail": "Sign in is required."}, status_code=401)
+        else:
+            request.state.account_id = account.id
+            request.state.username = account.username
+
+    if response is None:
+        response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+        "font-src 'self' data:; connect-src 'self'; form-action 'self'; "
+        "base-uri 'self'; frame-ancestors 'none'; object-src 'none'"
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+STATIC_DIR = Path(__file__).parent / "static"
+app.mount("/assets", StaticFiles(directory=STATIC_DIR), name="assets")
 app.include_router(jobs_router)
+app.include_router(scans_router)
+app.include_router(profiles_router)
+app.include_router(auth_router)
 
 
-@app.get("/", tags=["meta"])
-def root() -> dict[str, str]:
+@app.get("/", include_in_schema=False)
+def dashboard() -> FileResponse:
+    """Serve the project dashboard."""
+    return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/login", include_in_schema=False)
+def login_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "login.html")
+
+
+@app.get("/account", include_in_schema=False)
+def account_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "account.html")
+
+
+@app.get("/api", tags=["meta"])
+def api_info() -> dict[str, str]:
     return {
-        "name": "Local AI Job Agent API",
+        "name": "JobHarbor API",
         "status": "running",
         "environment": settings.app_env,
     }
@@ -70,6 +166,15 @@ def health_ollama() -> dict[str, str]:
             status_code=503,
             detail="Ollama unavailable",
         ) from exc
+    available_models = response.json().get("models", [])
+    if not any(
+        isinstance(model, dict) and model.get("name") == settings.ollama_model
+        for model in available_models
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail=f"Configured Ollama model '{settings.ollama_model}' is not downloaded.",
+        )
     return {
         "status": "healthy",
         "service": "ollama",

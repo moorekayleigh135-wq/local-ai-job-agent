@@ -1,1 +1,1 @@
-"""Local AI Job Agent API package."""
+"""JobHarbor local AI job-search API package."""

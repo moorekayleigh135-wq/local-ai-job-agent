@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     mysql_database: str = "job_agent"
     mysql_user: str = "job_agent"
     mysql_password: str = ""
+    profile_encryption_key: str = ""
     ollama_url: str = "http://localhost:11434"
     ollama_model: str = "qwen3:8b"
 

@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Account — JobHarbor</title>
+  <style>
+    :root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;color:#21382f;background:#f4f5ef}*{box-sizing:border-box}body{margin:0;min-height:100vh;padding:24px}.shell{max-width:720px;margin:28px auto}.top{display:flex;align-items:center;justify-content:space-between;margin-bottom:28px}.brand{font-size:16px;font-weight:750}.back{color:#597763;text-decoration:none;font-size:12px}.panel{background:white;border:1px solid #e4e8df;border-radius:16px;padding:26px;margin-bottom:17px}.eyebrow{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#71876e;font-weight:700}h1{font-size:26px;letter-spacing:-.7px;margin:8px 0 23px}h2{font-size:16px;margin:0 0 7px}.sub{font-size:12px;color:#7b857e;line-height:1.6;margin:0 0 20px}.field{display:grid;gap:7px;margin:15px 0}.field label{font-size:12px;font-weight:650}.field input{font:inherit;font-size:14px;padding:12px;border:1px solid #dfe5dc;border-radius:9px;max-width:420px}.button{border:0;background:#365c45;color:white;border-radius:9px;padding:11px 15px;font:inherit;font-size:12px;font-weight:650;cursor:pointer}.button.secondary{background:#edf1ea;color:#385444}.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.status{font-size:12px;color:#9a4339;min-height:18px;margin:12px 0 0}.status.ok{color:#426c4c}.note{font-size:11px;color:#818c83;margin-top:10px}
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="top"><div class="brand">JobHarbor</div><a class="back" href="/">← Back to workspace</a></header>
+    <section class="panel"><div class="eyebrow">Local account</div><h1>Account settings</h1><p class="sub">Signed in as <strong id="username">…</strong>. Changing your password ends other active sessions.</p></section>
+    <section class="panel">
+      <h2>Change password</h2><p class="sub">Use at least 12 characters. Your current password is required.</p>
+      <form id="password-form">
+        <div class="field"><label for="current-password">Current password</label><input id="current-password" type="password" autocomplete="current-password" required maxlength="256"></div>
+        <div class="field"><label for="new-password">New password</label><input id="new-password" type="password" autocomplete="new-password" minlength="12" required maxlength="256"></div>
+        <div class="field"><label for="confirm-password">Confirm new password</label><input id="confirm-password" type="password" autocomplete="new-password" minlength="12" required maxlength="256"></div>
+        <div class="row"><button class="button" type="submit">Save new password</button><button class="button secondary" id="logout" type="button">Sign out</button></div>
+        <div id="status" class="status" role="status"></div>
+      </form>
+    </section>
+  </main>
+  <script>
+    const $=s=>document.querySelector(s), status=$('#status');
+    fetch('/auth/status').then(r=>r.json()).then(data=>{if(!data.authenticated)location.replace('/login');else $('#username').textContent=data.username});
+    $('#password-form').addEventListener('submit',async e=>{e.preventDefault();status.className='status';if($('#new-password').value!==$('#confirm-password').value){status.textContent='The new passwords do not match.';return}try{const r=await fetch('/auth/password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({current_password:$('#current-password').value,new_password:$('#new-password').value})});const body=await r.json();if(!r.ok)throw Error(body.detail||'Could not change password.');status.textContent='Password changed. Other active sessions have been signed out.';status.className='status ok';e.target.reset()}catch(error){status.textContent=error.message}});
+    $('#logout').addEventListener('click',async()=>{await fetch('/auth/logout',{method:'POST'});location.assign('/login')});
+  </script>
+</body>
+</html>
