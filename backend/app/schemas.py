@@ -81,7 +81,7 @@ class CareerSiteRead(BaseModel):
 class SearchPreferencesUpdate(BaseModel):
     role_keywords: list[str] = Field(default_factory=list, max_length=20)
     locations: list[str] = Field(default_factory=list, max_length=20)
-    skills: list[str] = Field(default_factory=list, max_length=30)
+    skills: list[str] = Field(default_factory=list, max_length=50)
     work_arrangements: list[str] = Field(default_factory=list, max_length=3)
     min_match_score: int = Field(default=40, ge=0, le=100)
 

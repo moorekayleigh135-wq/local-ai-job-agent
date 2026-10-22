@@ -90,7 +90,7 @@ def apply_profile_to_search(db: Session = Depends(get_db)) -> SearchPreferences:
 
     stored = profile.profile_data
     additions = stored.get("profile", stored) if isinstance(stored, dict) else {}
-    for field, maximum in (("role_keywords", 20), ("skills", 30)):
+    for field, maximum in (("role_keywords", 20), ("skills", 50)):
         existing = list(getattr(preferences, field) or [])
         seen = {value.casefold() for value in existing}
         for value in additions.get(field, []):
