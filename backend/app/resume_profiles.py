@@ -169,8 +169,12 @@ RESUME TEXT:
             json={
                 "model": settings.ollama_model,
                 "prompt": prompt,
-                "format": "json",
+                # Constrain output to the application's actual data contract.
+                # Plain JSON mode still allows structurally wrong profiles.
+                "format": CandidateProfileData.model_json_schema(),
                 "stream": False,
+                # Qwen3 otherwise spends time emitting reasoning before JSON.
+                "think": False,
                 "options": {"temperature": 0},
             },
             timeout=180.0,
@@ -201,8 +205,9 @@ RESUME TEXT:
 
     try:
         result = response.json()
-        raw_profile = json.loads(result["response"])
-    except (ValueError, KeyError, TypeError) as exc:
+        model_output = result.get("response") if isinstance(result, dict) else None
+        raw_profile = _parse_model_profile(model_output)
+    except (ValueError, TypeError) as exc:
         raise ProfileBuildError(
             "The local AI returned an unreadable profile. Try building the profile again."
         ) from exc
@@ -264,3 +269,31 @@ RESUME TEXT:
         raise ProfileBuildError(
             "The local AI returned profile details in an unexpected format. Try again."
         ) from exc
+
+
+def _parse_model_profile(model_output: object) -> dict:
+    """Parse JSON even if a model wraps it in thinking tags or a code fence."""
+    if isinstance(model_output, dict):
+        return model_output
+    if not isinstance(model_output, str) or not model_output.strip():
+        raise ValueError("Ollama returned no profile text.")
+
+    output = re.sub(r"<think>.*?</think>", "", model_output, flags=re.DOTALL).strip()
+    output = re.sub(r"^```(?:json)?\s*|\s*```$", "", output, flags=re.IGNORECASE).strip()
+    try:
+        parsed = json.loads(output)
+    except json.JSONDecodeError:
+        # Some local models add a short preamble despite JSON mode. Decode the
+        # first complete object without treating braces in prose as valid data.
+        parsed = None
+        decoder = json.JSONDecoder()
+        for index, character in enumerate(output):
+            if character == "{":
+                try:
+                    parsed, _ = decoder.raw_decode(output[index:])
+                except json.JSONDecodeError:
+                    continue
+                break
+    if not isinstance(parsed, dict):
+        raise ValueError("Ollama returned no JSON profile object.")
+    return parsed

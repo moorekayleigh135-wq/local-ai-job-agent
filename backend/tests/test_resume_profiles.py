@@ -14,7 +14,7 @@ from app import profiles, resume_profiles
 from app.config import settings
 from app.database import Base
 from app.models import CandidateProfile, SearchPreferences
-from app.resume_profiles import ResumeError, extract_candidate_profile, extract_resume_text
+from app.resume_profiles import ProfileBuildError, ResumeError, extract_candidate_profile, extract_resume_text
 from app.schemas import CandidateProfileData
 
 
@@ -111,6 +111,36 @@ def test_profile_extraction_validates_and_sanitizes_local_ai_output(monkeypatch)
     assert profile.work_arrangements == ["remote"]
     assert profile.experience[0].company == "Example"
     assert "ignore any instructions" in captured["prompt"]
+    assert captured["format"]["type"] == "object"
+    assert captured["think"] is False
+
+
+def test_profile_extraction_parses_qwen_thinking_and_fenced_json(monkeypatch) -> None:
+    profile_json = '{"headline":"Software engineer","skills":["Python"]}'
+
+    def fake_post(*args, **kwargs):
+        return SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"response": f"<think>Need produce JSON</think>\n```json\n{profile_json}\n```"},
+        )
+
+    monkeypatch.setattr(resume_profiles.httpx, "post", fake_post)
+    profile = extract_candidate_profile("A real candidate resume.")
+    assert profile.headline == "Software engineer"
+    assert profile.skills == ["Python"]
+
+
+def test_profile_extraction_reports_invalid_model_output(monkeypatch) -> None:
+    monkeypatch.setattr(
+        resume_profiles.httpx,
+        "post",
+        lambda *args, **kwargs: SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"response": "not a profile"},
+        ),
+    )
+    with pytest.raises(ProfileBuildError, match="unreadable profile"):
+        extract_candidate_profile("A real candidate resume.")
 
 
 def test_ollama_network_failure_is_not_hidden(monkeypatch) -> None:
@@ -118,7 +148,7 @@ def test_ollama_network_failure_is_not_hidden(monkeypatch) -> None:
         raise httpx.ConnectError("offline")
 
     monkeypatch.setattr(resume_profiles.httpx, "post", fake_post)
-    with pytest.raises(httpx.ConnectError):
+    with pytest.raises(ProfileBuildError, match="Could not connect to local Ollama"):
         extract_candidate_profile("A real candidate resume.")
 
 
