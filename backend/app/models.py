@@ -88,6 +88,16 @@ class SearchPreferences(Base):
     )
 
 
+class NotificationSettings(Base):
+    """Local notification and automatic scan controls for this installation."""
+
+    __tablename__ = "notification_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    scan_interval_minutes: Mapped[int] = mapped_column(Integer, default=60, nullable=False)
+    max_notifications_per_day: Mapped[int] = mapped_column(Integer, default=10, nullable=False)
+
+
 class CandidateProfile(Base):
     """Structured, user-reviewed career profile extracted from a resume."""
 
@@ -116,3 +126,43 @@ class JobScanMatch(Base):
     scanned_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
     )
+
+
+class JobNotification(Base):
+    """A locally stored alert for a newly recommended job."""
+
+    __tablename__ = "job_notifications"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    job_id: Mapped[int] = mapped_column(
+        ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    match_score: Mapped[int] = mapped_column(Integer, nullable=False)
+    posted_at: Mapped[datetime | None] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    read_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class BrowserPushSubscription(Base):
+    """Encrypted browser push endpoint and its per-device secrets."""
+
+    __tablename__ = "browser_push_subscriptions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    endpoint_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    subscription_data: Mapped[dict] = mapped_column(EncryptedJSON(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+
+
+class PushServerKey(Base):
+    """Locally generated VAPID key; the private half is encrypted at rest."""
+
+    __tablename__ = "push_server_keys"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    public_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    private_key: Mapped[dict] = mapped_column(EncryptedJSON(), nullable=False)

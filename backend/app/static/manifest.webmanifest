@@ -1,0 +1,18 @@
+{
+  "name": "JobHarbor — Local AI Job Search",
+  "short_name": "JobHarbor",
+  "description": "Private, local-first job search and alerts.",
+  "start_url": "/notifications",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f8f6fa",
+  "theme_color": "#450084",
+  "icons": [
+    {
+      "src": "/assets/jobharbor-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

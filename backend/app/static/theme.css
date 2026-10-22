@@ -1,0 +1,140 @@
+/* JobHarbor's JMU-inspired palette: purple for actions, gold for accents. */
+:root {
+  color-scheme: light;
+  --ink: #27222f;
+  --muted: #625c69;
+  --line: #ded8e6;
+  --paper: #ffffff;
+  --wash: #f8f6fa;
+  --green: #450084;
+  --mint: #eee7f5;
+  --soft: #fcfaff;
+  --red: #8f2632;
+  --shadow: 0 12px 35px rgba(45, 25, 63, .08);
+  --jmu-purple: #450084;
+  --jmu-gold: #cbb677;
+  --jmu-light-purple: #dacce6;
+  --jmu-light-gold: #f4efe1;
+}
+
+body { background: var(--wash); color: var(--ink); }
+a { color: var(--jmu-purple); }
+.app-sidebar { position: fixed; z-index: 5; inset: 0 auto 0 0; width: 210px; overflow-y: auto; padding: 25px 14px; background: var(--paper); border-right: 1px solid var(--line); }
+.app-sidebar .app-brand { font-size: 16px; font-weight: 800; padding: 5px 9px 24px; }
+.app-sidebar nav { display: grid; gap: 4px; }
+.app-sidebar a { color: var(--muted); text-decoration: none; display: flex; align-items: center; gap: 10px; padding: 10px; border-radius: 9px; font-size: 12px; font-weight: 650; }
+.app-sidebar a:hover, .app-sidebar a[aria-current="page"] { color: var(--jmu-purple); background: var(--mint); }
+.app-sidebar svg { width: 17px; height: 17px; flex: 0 0 17px; stroke: currentColor; stroke-width: 1.8; fill: none; }
+body.with-app-sidebar { padding-left: 230px; }
+.nav a.active { color: var(--jmu-purple); background: var(--mint); }
+.primary-btn, .button, .scan-btn, .mark, .brand-mark {
+  background-color: var(--jmu-purple);
+  color: #fff;
+}
+.button.secondary { background: var(--mint); color: var(--jmu-purple); }
+.filter-btn.selected, .count, .metric-icon, .company-logo, .empty-icon,
+.service-icon, .site-icon, .brand-mark, .mark {
+  background-color: var(--mint);
+  color: var(--jmu-purple);
+}
+.brand-mark, .mark { background-color: var(--jmu-purple); color: #fff; }
+.score, .ai-badge, .notice, .live-pill {
+  background-color: var(--jmu-light-gold);
+  color: #333;
+}
+.workspace-dot { background: var(--jmu-purple); box-shadow: 0 0 0 4px var(--mint); }
+.privacy, .model-callout { background: var(--mint); color: #39214e; }
+.privacy strong, .model-callout strong { color: var(--jmu-purple); }
+.model-callout small { color: #39214e; }
+.job-card:hover { background: var(--soft); }
+.toast { background: var(--jmu-purple); color: #fff; }
+.score { border: 1px solid #ad9c65; }
+.term, .chip, .tag { background: var(--mint); color: #39214e; }
+.eyebrow, .back, .text-link, .job-url, .result-link,
+.actions a, .actions button, .range-value { color: var(--jmu-purple); }
+.field input:focus, .input:focus, .area:focus, .capture input:focus,
+.capture textarea:focus, .search input:focus {
+  border-color: var(--jmu-purple);
+  box-shadow: 0 0 0 3px rgba(69, 0, 132, .15);
+}
+.status.ok, .service-status.ok { color: #365c25; }
+.status.error, .service-status.offline, .error { color: #8f2632; }
+.button.danger { background: #f8e9e9; color: #7a1d29; }
+.button:focus-visible, .primary-btn:focus-visible, .scan-btn:focus-visible,
+a:focus-visible, input:focus-visible, textarea:focus-visible {
+  outline: 3px solid #5b2b87;
+  outline-offset: 2px;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ink: #f4eff8;
+  --muted: #c0b7ca;
+  --line: #4b4055;
+  --paper: #241c2d;
+  --wash: #18131f;
+  --mint: #392849;
+  --soft: #2c2236;
+  --shadow: 0 12px 35px rgba(0, 0, 0, .28);
+}
+:root[data-theme="dark"] body { background: var(--wash); color: var(--ink); }
+:root[data-theme="dark"] a,
+:root[data-theme="dark"] .eyebrow,
+:root[data-theme="dark"] .back,
+:root[data-theme="dark"] .text-link,
+:root[data-theme="dark"] .job-url,
+:root[data-theme="dark"] .result-link,
+:root[data-theme="dark"] .actions a,
+:root[data-theme="dark"] .actions button,
+:root[data-theme="dark"] .range-value { color: #d7b8ff; }
+:root[data-theme="dark"] .sidebar,
+:root[data-theme="dark"] .side-note,
+:root[data-theme="dark"] .workspace,
+:root[data-theme="dark"] .panel,
+:root[data-theme="dark"] .metric,
+:root[data-theme="dark"] .capture,
+:root[data-theme="dark"] .mini-panel,
+:root[data-theme="dark"] .site,
+:root[data-theme="dark"] .shell { background-color: var(--paper); }
+:root[data-theme="dark"] .nav a { color: #c0b7ca; }
+:root[data-theme="dark"] .nav a.active { color: #e0c8ff; background: #392849; }
+:root[data-theme="dark"] .search input,
+:root[data-theme="dark"] .capture input,
+:root[data-theme="dark"] .capture textarea,
+:root[data-theme="dark"] .field input,
+:root[data-theme="dark"] .input,
+:root[data-theme="dark"] .area,
+:root[data-theme="dark"] .drop,
+:root[data-theme="dark"] .setting input,
+:root[data-theme="dark"] .setting select { background: #1b1522; color: var(--ink); border-color: var(--line); }
+:root[data-theme="dark"] .filter-btn,
+:root[data-theme="dark"] .button.secondary { background: #392849; color: #e0c8ff; border-color: var(--line); }
+:root[data-theme="dark"] .job-card,
+:root[data-theme="dark"] .item,
+:root[data-theme="dark"] .job-desc,
+:root[data-theme="dark"] .job-list,
+:root[data-theme="dark"] .service-row { border-color: var(--line); }
+:root[data-theme="dark"] .job-company,
+:root[data-theme="dark"] .job-meta,
+:root[data-theme="dark"] .job-desc,
+:root[data-theme="dark"] .field-label,
+:root[data-theme="dark"] .summary,
+:root[data-theme="dark"] .section h3,
+:root[data-theme="dark"] .item p { color: #c0b7ca; }
+:root[data-theme="dark"] .term,
+:root[data-theme="dark"] .chip,
+:root[data-theme="dark"] .tag { background: #392849; color: #eadcff; }
+:root[data-theme="dark"] .privacy,
+:root[data-theme="dark"] .model-callout,
+:root[data-theme="dark"] .tip { background: #392849; color: #eadcff; }
+:root[data-theme="dark"] .privacy strong,
+:root[data-theme="dark"] .model-callout strong { color: #f4eff8; }
+:root[data-theme="dark"] .toast { color: #fff; }
+:root[data-theme="dark"] .app-sidebar { background: var(--paper); border-color: var(--line); }
+@media (max-width: 900px) {
+  body.with-app-sidebar { padding: 12px; }
+  .app-sidebar { position: static; width: auto; max-height: none; overflow: visible; padding: 10px; margin-bottom: 14px; border: 1px solid var(--line); border-radius: 12px; }
+  .app-sidebar .app-brand { display: none; }
+  .app-sidebar nav { display: flex; gap: 2px; overflow-x: auto; }
+  .app-sidebar a { white-space: nowrap; font-size: 10px; padding: 8px; }
+}

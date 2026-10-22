@@ -113,21 +113,76 @@ class SearchPreferencesRead(SearchPreferencesUpdate):
     updated_at: datetime | None = None
 
 
+class NotificationSettingsUpdate(BaseModel):
+    scan_interval_minutes: int = Field(default=60, ge=15, le=1440)
+    max_notifications_per_day: int = Field(default=10, ge=1, le=100)
+
+
+class NotificationSettingsRead(NotificationSettingsUpdate):
+    pass
+
+
+class MatchThresholdUpdate(BaseModel):
+    min_match_score: int = Field(ge=0, le=100)
+
+
 class ScannedJobRead(BaseModel):
     job: JobRead
     match_score: int
+    recommendation: str
+    recommendation_tip: str
     matched_terms: list[str]
     scanned_at: datetime
+
+
+class JobNotificationRead(BaseModel):
+    id: int
+    job_id: int
+    job_title: str | None
+    company: str | None
+    source_url: str | None
+    match_score: int
+    posted_at: datetime | None
+    recommendation: str
+    recommendation_tip: str
+    matched_terms: list[str]
+    created_at: datetime
+    read_at: datetime | None
 
 
 class ScanSummary(BaseModel):
     company: str
     scanned_count: int
     matched_count: int
+    below_threshold_count: int = 0
     new_count: int
     updated_count: int
+    notified_count: int = 0
     skipped_count: int
     warnings: list[str] = Field(default_factory=list)
+
+
+class BrowserPushSubscriptionCreate(BaseModel):
+    endpoint: HttpUrl
+    keys: dict[str, str] = Field(min_length=2, max_length=2)
+
+    @field_validator("keys")
+    @classmethod
+    def validate_push_keys(cls, values: dict[str, str]) -> dict[str, str]:
+        if not {"p256dh", "auth"}.issubset(values):
+            raise ValueError("Push subscription must include p256dh and auth keys.")
+        if any(not value or len(value) > 256 for value in values.values()):
+            raise ValueError("Push subscription keys are invalid.")
+        return values
+
+
+class BrowserPushSubscriptionSaved(BaseModel):
+    subscription_id: str
+
+
+class BrowserPushConfig(BaseModel):
+    enabled: bool
+    public_key: str | None
 
 
 def _clean_terms(values: list[str]) -> list[str]:

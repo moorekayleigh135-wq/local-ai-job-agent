@@ -1,6 +1,7 @@
 """FastAPI entry point for JobHarbor, a local AI job-search assistant."""
 
 from contextlib import asynccontextmanager
+import asyncio
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -12,11 +13,16 @@ from fastapi.staticfiles import StaticFiles
 from app import models  # Register SQLAlchemy models before create_all().
 from app.config import settings
 from app.auth import account_for_token, router as auth_router, COOKIE_NAME
-from app.database import Base, SessionLocal, check_database_connection, engine, migrate_legacy_personal_data
+from app.database import (
+    Base, SessionLocal, check_database_connection, engine,
+    migrate_legacy_personal_data, migrate_notification_posted_at,
+)
 from app.security import validate_encryption_key
 from app.jobs import router as jobs_router
 from app.profiles import router as profiles_router
 from app.scans import router as scans_router
+from app.scheduler import scheduled_scan_loop
+from app.push_notifications import ensure_vapid_keys
 
 
 @asynccontextmanager
@@ -25,7 +31,17 @@ async def lifespan(app: FastAPI):
     validate_encryption_key()
     Base.metadata.create_all(bind=engine)
     migrate_legacy_personal_data()
-    yield
+    migrate_notification_posted_at()
+    ensure_vapid_keys()
+    scan_task = asyncio.create_task(scheduled_scan_loop(), name="company-scan-scheduler")
+    try:
+        yield
+    finally:
+        scan_task.cancel()
+        try:
+            await scan_task
+        except asyncio.CancelledError:
+            pass
 
 
 production = settings.app_env.casefold() == "production"
@@ -48,8 +64,11 @@ PUBLIC_PATHS = {
     "/health/db",
     "/health/ollama",
     "/api",
+    "/service-worker.js",
+    "/manifest.webmanifest",
+    "/assets/jobharbor-icon.svg",
 }
-PRIVATE_UI_PATHS = {"/", "/account", "/assets/index.html", "/assets/profile.html", "/assets/scanner.html"}
+PRIVATE_UI_PATHS = {"/", "/account", "/notifications", "/settings", "/assets/index.html", "/assets/profile.html", "/assets/scanner.html", "/assets/settings.html"}
 
 
 @app.middleware("http")
@@ -122,6 +141,30 @@ def login_page() -> FileResponse:
 @app.get("/account", include_in_schema=False)
 def account_page() -> FileResponse:
     return FileResponse(STATIC_DIR / "account.html")
+
+
+@app.get("/notifications", include_in_schema=False)
+def notifications_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "notifications.html")
+
+
+@app.get("/settings", include_in_schema=False)
+def settings_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "settings.html")
+
+
+@app.get("/service-worker.js", include_in_schema=False)
+def service_worker() -> FileResponse:
+    return FileResponse(
+        STATIC_DIR / "service-worker.js",
+        media_type="application/javascript",
+        headers={"Service-Worker-Allowed": "/", "Cache-Control": "no-cache"},
+    )
+
+
+@app.get("/manifest.webmanifest", include_in_schema=False)
+def manifest() -> FileResponse:
+    return FileResponse(STATIC_DIR / "manifest.webmanifest", media_type="application/manifest+json")
 
 
 @app.get("/api", tags=["meta"])

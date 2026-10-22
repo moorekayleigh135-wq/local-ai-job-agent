@@ -8,6 +8,7 @@ import re
 import socket
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from html import unescape
 from urllib.parse import urljoin, urlsplit
 from urllib.robotparser import RobotFileParser
@@ -36,6 +37,7 @@ class Candidate:
     url: str
     title: str
     description: str
+    posted_at: datetime | None = None
 
 
 @dataclass
@@ -45,6 +47,22 @@ class ScannedPosting:
     description: str
     score: int
     matched_terms: list[str]
+    posted_at: datetime | None = None
+
+
+def _parse_posted_at(value: object) -> datetime | None:
+    """Parse an ISO-style datePosted field from structured career-site data."""
+    if isinstance(value, list):
+        value = value[0] if value else None
+    if not isinstance(value, str):
+        return None
+    try:
+        posted_at = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if posted_at.tzinfo is None:
+        posted_at = posted_at.replace(tzinfo=timezone.utc)
+    return posted_at.astimezone(timezone.utc)
 
 
 def validate_public_url(url: str) -> str:
@@ -142,7 +160,7 @@ def _page_text(html: str) -> str:
 def _listing_candidates(html: str, page_url: str) -> list[Candidate]:
     soup = BeautifulSoup(html, "html.parser")
     candidates: list[Candidate] = []
-    seen: set[str] = set()
+    by_url: dict[str, Candidate] = {}
     for anchor in soup.find_all("a", href=True):
         raw_href = unescape(str(anchor.get("href", "")).strip())
         try:
@@ -153,7 +171,7 @@ def _listing_candidates(html: str, page_url: str) -> list[Candidate]:
             continue
         if parsed.scheme not in {"http", "https"} or not same_origin:
             continue
-        if absolute_url in seen or absolute_url.split("#", 1)[0] == page_url.split("#", 1)[0]:
+        if absolute_url in by_url or absolute_url.split("#", 1)[0] == page_url.split("#", 1)[0]:
             continue
         title = " ".join(anchor.stripped_strings).strip()
         if len(title) < 4 or len(title) > 255:
@@ -172,15 +190,14 @@ def _listing_candidates(html: str, page_url: str) -> list[Candidate]:
             ancestor = anchor.parent
         description = " ".join(ancestor.stripped_strings) if ancestor else title
         description = description[:4000]
-        candidates.append(Candidate(absolute_url, title, description))
-        seen.add(absolute_url)
-        if len(candidates) >= MAX_JOB_PAGES:
+        candidate = Candidate(absolute_url, title, description)
+        candidates.append(candidate)
+        by_url[absolute_url] = candidate
+        if len(candidates) >= 100:
             break
 
     # Many career sites render their visible listings from JSON-LD or a JSON
     # hydration payload. Read those data blocks without executing site scripts.
-    if len(candidates) >= MAX_JOB_PAGES:
-        return candidates
     structured: list[object] = []
     for script in soup.find_all("script"):
         script_type = str(script.get("type", "")).lower()
@@ -243,20 +260,36 @@ def _listing_candidates(html: str, page_url: str) -> list[Candidate]:
                     continue
             except ValueError:
                 continue
-            if absolute_url in seen or absolute_url.split("#", 1)[0] == page_url.split("#", 1)[0]:
-                continue
+            posted_at = _parse_posted_at(item.get("datePosted"))
             description = item.get("description", "")
             if not isinstance(description, str):
                 description = ""
             description = " ".join(BeautifulSoup(description, "html.parser").stripped_strings)
+            if absolute_url in by_url:
+                existing = by_url[absolute_url]
+                if existing.posted_at is None:
+                    existing.posted_at = posted_at
+                if len(description) > len(existing.description):
+                    existing.description = description[:4000]
+                continue
+            if absolute_url.split("#", 1)[0] == page_url.split("#", 1)[0]:
+                continue
             path_and_label = f"{parsed.path} {title}".lower()
             if not any(hint in path_and_label for hint in JOB_PATH_HINTS):
                 continue
-            candidates.append(Candidate(absolute_url, title, description[:4000] or title))
-            seen.add(absolute_url)
-            if len(candidates) >= MAX_JOB_PAGES:
-                return candidates
-    return candidates
+            candidate = Candidate(absolute_url, title, description[:4000] or title, posted_at)
+            candidates.append(candidate)
+            by_url[absolute_url] = candidate
+            if len(candidates) >= 200:
+                break
+    candidates.sort(
+        key=lambda candidate: (
+            candidate.posted_at is not None,
+            candidate.posted_at or datetime.min.replace(tzinfo=timezone.utc),
+        ),
+        reverse=True,
+    )
+    return candidates[:MAX_JOB_PAGES]
 
 
 def _score_posting(text: str, preferences: dict) -> tuple[int, list[str]]:
@@ -333,12 +366,12 @@ def scan_career_site(site_url: str, preferences: dict) -> tuple[list[ScannedPost
                 score, terms = _score_posting(
                     f"{candidate.title} {candidate.description} {description}", preferences
                 )
-                if score >= int(preferences.get("min_match_score", 40)):
-                    postings.append(
-                        ScannedPosting(candidate.url, candidate.title, description, score, terms)
+                postings.append(
+                    ScannedPosting(
+                        candidate.url, candidate.title, description, score, terms,
+                        candidate.posted_at,
                     )
-                else:
-                    skipped += 1
+                )
             except ScanError as exc:
                 skipped += 1
                 if len(errors) < 3:

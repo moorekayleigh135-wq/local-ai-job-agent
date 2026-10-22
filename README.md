@@ -4,7 +4,7 @@ A self-hosted AI job-search assistant designed to discover, organize, compare, a
 
 The stack targets **Linux Mint**, **Docker Engine**, an **NVIDIA RTX 4080 / 4080 SUPER (16 GB VRAM)**, **Ollama**, and **MySQL 8.4**. The dashboard and Ollama API bind to loopback by default, so they are available on the Mint host and are not published to the LAN.
 
-> **Status:** personal-project MVP. The repository includes a private Docker stack, MySQL-backed job storage, local Ollama extraction, a resume-based career profile, a dashboard, user-saved search preferences, and user-started scans of public company career pages. Scheduled collection and application tracking remain future work.
+> **Status:** personal-project MVP. The repository includes a private Docker stack, MySQL-backed job storage, local Ollama extraction, a resume-based career profile, a dashboard, scheduled scans of user-selected public career pages, match alerts, and opt-in web push. ATS-specific source coverage and application tracking remain future work.
 
 ## Goals
 
@@ -15,6 +15,7 @@ The stack targets **Linux Mint**, **Docker Engine**, an **NVIDIA RTX 4080 / 4080
 - Save manually captured and scanned job descriptions in MySQL; use local AI to extract details from manually pasted postings.
 - Use a local Ollama model to summarize descriptions and explain why a role may fit.
 - Provide a private dashboard for capturing and reviewing results.
+- Scan saved company pages automatically and send opt-in browser push alerts for newly discovered matches.
 
 ## Principles
 
@@ -24,6 +25,7 @@ The stack targets **Linux Mint**, **Docker Engine**, an **NVIDIA RTX 4080 / 4080
 4. **Respect source rules:** use user-selected public career pages, follow `robots.txt`, and limit requests. Prefer official feeds and APIs where available. Any LinkedIn or Handshake integration must respect terms, authentication requirements, and rate limits. Do not bypass access controls.
 5. **Secrets stay local:** credentials belong in `.env`, which Git ignores. Commit `.env.example` with placeholders only.
 6. **Human review:** AI-generated summaries and fit scores are suggestions, not guarantees.
+7. **Accessible identity:** use JMU purple for primary actions and dark text on gold or light-purple accents; include labels and percentages so meaning does not depend on color alone.
 
 ## Architecture
 
@@ -128,7 +130,9 @@ Interactive API docs are available at <http://127.0.0.1:8000/docs> only when `AP
 
 ### 5. Open the dashboard
 
-Visit <http://127.0.0.1:8000/> on the Mint machine. The first visit opens account setup; create the local user and a password of at least 12 characters. Later visits require that username and password. The account page includes password change and sign out. This build has one account because its profile and job workspace are single-user; adding multiple accounts would require per-user data separation. After signing in, paste a job description, extract structured details with your local Ollama model, and review saved opportunities. Open **Career profile** to upload a PDF, DOCX, or TXT resume (up to 10 MB) and build a structured profile using local Ollama. The uploaded file is not retained; the extracted career profile is encrypted in MySQL. Search preferences and match terms are encrypted too. You can choose **Use in company search** to add its roles, skills, locations, and work preferences to your scanner profile. Open **Company search** to review those signals, add career-page URLs, and start a scan. The scanner checks `robots.txt`, stays on the submitted host, reads job links from HTML and embedded JSON/JavaScript application data, and reads at most 10 job pages per scan. It does not execute site scripts. It skips pages that disallow access, require a redirect, or link to another host; for those sites, add the direct hosted career page (such as the company's ATS page). Matches use transparent keyword coverage rather than an AI-generated judgment. Job descriptions must be at least 30 characters. The dashboard works without downloading external fonts.
+Use the **Settings** page to choose light or dark theme, set the saved-company scan frequency (15 minutes to 24 hours), cap new alerts per day (1–100), and choose the minimum match percentage. Scan and match controls are stored in the local database; the theme setting is kept in the current browser. Once the daily alert cap is reached, scanning and job discovery continue, but new notifications wait until the next day.
+
+Visit <http://127.0.0.1:8000/> on the Mint machine. The first visit opens account setup; create the local user and a password of at least 12 characters. Later visits require that username and password. The account page includes password change and sign out. This build has one account because its profile and job workspace are single-user; adding multiple accounts would require per-user data separation. After signing in, paste a job description, extract structured details with your local Ollama model, and review saved opportunities. Open **Career profile** to upload a PDF, DOCX, or TXT resume (up to 10 MB) and build a structured profile using local Ollama. The uploaded file is not retained; the extracted career profile is encrypted in MySQL. Search preferences and match terms are encrypted too. You can choose **Use in company search** to add its roles, skills, locations, and work preferences to your scanner profile. Open **Company search** to review those signals and add public career-page URLs. The server scans saved pages automatically on startup and about once per `SCAN_INTERVAL_MINUTES` (default 60, minimum 15). It checks `robots.txt`, stays on the submitted host, prioritizes structured listings with recent `datePosted` values, and reads at most 10 job-detail pages per company each cycle. It reads HTML and embedded JSON/JavaScript data without executing site scripts. Pages that disallow access, require a redirect, or link to another host are skipped; use the company's direct hosted ATS page where possible. When a source exposes `datePosted`, alerts are limited to postings inside `NEW_JOB_WINDOW_HOURS` (default 48); otherwise, the app can only say when it first detected a listing. Set the minimum match score to filter recommendations. Scores describe weighted keyword coverage, not a hiring probability: 80%+ strong match, 60–79% good match, and below 60% potential match. The local **Alerts** inbox remains available even when push is off. To receive phone and desktop push while the page is closed, open Alerts on each device over HTTPS and select **Enable phone & desktop alerts**. Each device must grant permission. Web Push encrypts alert contents for the device; push providers can see the subscription endpoint and delivery timing. The VAPID private key and browser subscription are encrypted in MySQL. On iPhone/iPad, add the site to the Home Screen to enable Web Push. The default loopback address is for the Mint machine; phone access requires a private HTTPS route such as Tailscale, which is a later machine setup step. Automatic checks reduce detection delay but cannot guarantee a specific application rank or cover pages that require executing remote scripts. Job descriptions must be at least 30 characters. The dashboard works without downloading external fonts.
 
 ## Useful commands
 
@@ -162,7 +166,7 @@ git check-ignore .env
 
 - Never commit `.env`, credentials, browser cookies, private job-search history, or database dumps.
 - Resume-derived profile fields, the source filename, search preferences, and match terms are encrypted with AES-256-GCM before they are written to MySQL. This protects database files and dumps from someone who has only obtained the database. The encryption key must be backed up separately from the database.
-- The API needs outbound network access to scan public company pages. Uploaded resume content is sent only to the configured Ollama endpoint, which is local in the provided Compose setup; it is not included in career-site scan requests. A complete compromise of the API host or process can access both the key and decrypted data, so application encryption cannot guarantee secrecy under that level of intrusion. Keep Mint patched, use full-disk encryption, and do not publish the services to the internet.
+- The API needs outbound network access to scan public company pages and to deliver opt-in Web Push messages. The push provider sees the endpoint and delivery timing; Web Push encrypts the message body for the subscribed browser. Uploaded resume content is sent only to the configured Ollama endpoint, which is local in the provided Compose setup; it is not included in career-site scan requests. A complete compromise of the API host or process can access both the key and decrypted data, so application encryption cannot guarantee secrecy under that level of intrusion. Keep Mint patched, use full-disk encryption, and do not publish the services to the internet.
 - Do not expose MySQL, the API, or Ollama directly to the public internet.
 - Port bindings are loopback-only. Before remote access, configure Tailscale deliberately and review firewall rules.
 - Store only the minimum data needed for job tracking. Avoid real personal data in fixtures and screenshots.
@@ -178,11 +182,14 @@ git check-ignore .env
 - [x] Upload resumes and build a local AI career profile
 - [x] Add user-started, same-host company career-page scanning with robots.txt checks
 - [x] Save search preferences and rank discovered postings by keyword coverage
+- [x] Create a local alert inbox for newly discovered jobs above the saved minimum match score
+- [x] Schedule recurring scans and opt-in encrypted browser push alerts
+- [x] Apply an accessible JMU-inspired purple and gold interface palette
+- [x] Label recommendations using match-score tiers and show matching profile signals
 - [x] Configure Docker restart policies and GPU reservation for an always-on Linux host
 - [ ] Verify GPU passthrough and reboot recovery on the Linux Mint machine
 - [ ] Add versioned database migrations
 - [ ] Add ATS-specific connectors and structured job-posting extraction
-- [ ] Add scheduled collection
 - [ ] Add local-model summarization and explainable matching
 - [ ] Track application status, notes, and follow-ups
 - [ ] Configure private Tailscale access and backups

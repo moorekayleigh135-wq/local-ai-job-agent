@@ -3,7 +3,7 @@
 from collections.abc import Generator
 import json
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.config import settings
@@ -111,3 +111,11 @@ def migrate_legacy_personal_data(database_engine=engine) -> None:
                 ),
                 {"payload": json.dumps(encrypt_json(terms or [])), "id": row["id"]},
             )
+
+
+def migrate_notification_posted_at(database_engine=engine) -> None:
+    """Add structured source dates to alert rows created by earlier local builds."""
+    columns = {column["name"] for column in inspect(database_engine).get_columns("job_notifications")}
+    if "posted_at" not in columns:
+        with database_engine.begin() as connection:
+            connection.execute(text("ALTER TABLE job_notifications ADD COLUMN posted_at DATETIME NULL"))
