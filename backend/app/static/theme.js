@@ -6,7 +6,7 @@
     document.querySelectorAll('[data-theme-toggle]').forEach((button) => {
       button.setAttribute('aria-pressed', String(theme === 'dark'));
       const label = button.querySelector('[data-theme-label]');
-      if (label) label.textContent = theme === 'dark' ? 'Dark' : 'Light';
+      if (label) label.textContent = theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme';
     });
   };
   let current = 'light';

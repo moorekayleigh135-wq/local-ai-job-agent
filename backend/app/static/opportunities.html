@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#450084">
+  <title>Opportunities — JobHarbor</title>
+  <script src="/assets/theme.js"></script>
+  <link rel="stylesheet" href="/assets/theme.css">
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 14px Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    .opportunities-main { max-width: 1240px; width: 100%; margin: 0 auto; padding: 36px 42px 60px; }
+    .crumb { color: var(--muted); font-size: 12px; margin-bottom: 34px; }
+    .intro { display: flex; justify-content: space-between; align-items: end; gap: 20px; margin-bottom: 26px; }
+    .eyebrow { color: var(--jmu-purple); font-size: 10px; font-weight: 750; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 8px; }
+    h1 { font-size: clamp(28px, 3.5vw, 40px); letter-spacing: -1.3px; margin: 0; }
+    .intro p { color: var(--muted); max-width: 640px; line-height: 1.6; margin: 9px 0 0; }
+    .panel { background: var(--paper); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow); }
+    .panel-head { padding: 20px 22px; display: flex; justify-content: space-between; align-items: center; gap: 15px; }
+    .panel-head h2 { font-size: 15px; margin: 0; }
+    .panel-head p { color: var(--muted); font-size: 11px; margin: 5px 0 0; }
+    .filters { display: flex; align-items: center; gap: 12px; padding: 0 22px 17px; }
+    .search { flex: 1; min-width: 180px; border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px; background: var(--paper); color: var(--ink); }
+    .filters label { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; }
+    .count { border-radius: 999px; background: var(--mint); color: var(--jmu-purple); padding: 7px 10px; font-size: 10px; font-weight: 750; white-space: nowrap; }
+    .job-list { border-top: 1px solid var(--line); }
+    .job-card { padding: 18px 22px; border-bottom: 1px solid var(--line); display: flex; gap: 13px; }
+    .job-card:last-child { border-bottom: 0; }
+    .company-logo { flex: 0 0 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; background: var(--mint); color: var(--jmu-purple); font-weight: 800; }
+    .job-main { min-width: 0; flex: 1; }
+    .job-row { display: flex; justify-content: space-between; gap: 12px; }
+    .job-title { font-weight: 750; line-height: 1.4; }
+    .job-company, .job-meta { color: var(--muted); font-size: 11px; margin-top: 4px; }
+    .job-date { color: var(--muted); font-size: 10px; white-space: nowrap; }
+    .job-meta { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 10px; }
+    .job-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+    .tag { background: var(--mint); color: var(--ink); border-radius: 999px; padding: 5px 8px; font-size: 9px; }
+    .empty { padding: 48px 20px; color: var(--muted); text-align: center; line-height: 1.6; }
+    .empty strong { display: block; color: var(--ink); margin-bottom: 5px; }
+    .empty a { color: var(--jmu-purple); font-weight: 700; }
+    @media (max-width: 700px) { .opportunities-main { padding: 24px 16px 40px; } .intro { align-items: start; flex-direction: column; } .filters { align-items: stretch; flex-direction: column; } .job-row { flex-direction: column; gap: 5px; } }
+  </style>
+</head>
+<body class="with-app-sidebar">
+  <aside class="app-sidebar" aria-label="Main navigation"><div class="app-brand"><span class="app-brand-mark" aria-hidden="true">JH</span>JobHarbor</div><nav>
+    <a href="/"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="8" height="8" rx="2"/><rect x="14" y="3" width="7" height="5" rx="2"/><rect x="14" y="11" width="7" height="10" rx="2"/><rect x="3" y="14" width="8" height="7" rx="2"/></svg>Overview</a>
+    <a href="/opportunities" aria-current="page"><svg viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="14" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M3 12h18M10 12v2h4v-2"/></svg>Opportunities</a>
+    <a href="/assets/profile.html"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>Career profile</a>
+    <a href="/assets/scanner.html"><svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5"/></svg>Company search</a>
+    <a href="/notifications"><svg viewBox="0 0 24 24"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg>Alerts</a>
+    <a href="/account"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>Account</a>
+    <a href="/settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="m19 13 2 1-2 4-2-1-2 1v2h-5v-2l-2-1-2 1-2-4 2-1v-2l-2-1 2-4 2 1 2-1V4h5v2l2 1 2-1 2 4-2 1z"/></svg>Settings</a>
+  </nav></aside>
+  <main class="opportunities-main">
+    <div class="crumb"><a href="/">Workspace</a> / Opportunities</div>
+    <section class="intro"><div><div class="eyebrow">Your saved roles</div><h1>Opportunities</h1><p>Search and review every job you’ve saved, including roles captured manually and matches found on company career pages.</p></div></section>
+    <section class="panel" aria-labelledby="opportunities-heading">
+      <div class="panel-head"><div><h2 id="opportunities-heading">All opportunities</h2><p id="caption">Loading your saved roles…</p></div><span id="count" class="count">—</span></div>
+      <div class="filters"><input id="search" class="search" type="search" aria-label="Search opportunities" placeholder="Search title, company, location, or skill"><label><input id="remote" type="checkbox">Remote roles</label></div>
+      <div id="job-list" class="job-list" aria-live="polite"><div class="empty">Loading saved opportunities…</div></div>
+    </section>
+  </main>
+  <script>
+    const $ = (selector) => document.querySelector(selector);
+    let jobs = [];
+    const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+    const shortDate = (value) => { if (!value) return ''; const date = new Date(value); return Number.isNaN(date.getTime()) ? '' : new Intl.DateTimeFormat(undefined, {month:'short', day:'numeric'}).format(date); };
+    function render() {
+      const query = $('#search').value.trim().toLocaleLowerCase();
+      const visible = jobs.filter((job) => {
+        const fields = [job.title, job.company, job.location, job.employment_type, job.job_level, ...(job.skills || [])];
+        return (!query || fields.filter(Boolean).join(' ').toLocaleLowerCase().includes(query)) && (!$('#remote').checked || job.work_arrangement === 'remote');
+      });
+      $('#count').textContent = `${visible.length} ${visible.length === 1 ? 'role' : 'roles'}`;
+      $('#caption').textContent = `${jobs.length} saved ${jobs.length === 1 ? 'opportunity' : 'opportunities'}`;
+      if (!visible.length) {
+        $('#job-list').innerHTML = `<div class="empty"><strong>${jobs.length ? 'No roles match those filters.' : 'No saved opportunities yet.'}</strong>${jobs.length ? 'Try a different search.' : 'Add a role from <a href="/">Overview</a> or scan company pages in <a href="/assets/scanner.html">Company search</a>.'}</div>`;
+        return;
+      }
+      $('#job-list').innerHTML = visible.map((job) => {
+        const skills = (job.skills || []).slice(0, 8);
+        const details = job.description ? `<details><summary>View job description</summary><p>${escapeHtml(job.description)}</p>${job.source_url ? `<a href="${escapeHtml(job.source_url)}" target="_blank" rel="noopener noreferrer">Open original posting ↗</a>` : ''}</details>` : '';
+        return `<article class="job-card"><div class="company-logo" aria-hidden="true">${escapeHtml((job.company || job.title || '?').trim().charAt(0).toUpperCase())}</div><div class="job-main"><div class="job-row"><div><div class="job-title">${escapeHtml(job.title || 'Untitled opportunity')}</div><div class="job-company">${escapeHtml(job.company || 'Company not listed')}</div></div><time class="job-date">${escapeHtml(shortDate(job.created_at))}</time></div><div class="job-meta">${[job.location, job.employment_type, job.work_arrangement].filter(Boolean).map(escapeHtml).join(' · ')}</div>${skills.length ? `<div class="job-tags">${skills.map((skill) => `<span class="tag">${escapeHtml(skill)}</span>`).join('')}</div>` : ''}${details}</div></article>`;
+      }).join('');
+    }
+    async function load() {
+      try {
+        const response = await fetch('/jobs?limit=100');
+        if (!response.ok) throw new Error('Could not load opportunities. Refresh and try again.');
+        jobs = await response.json();
+        render();
+      } catch (error) {
+        $('#caption').textContent = 'Unable to load your saved roles';
+        $('#job-list').innerHTML = `<div class="empty error">${escapeHtml(error.message)}</div>`;
+      }
+    }
+    $('#search').addEventListener('input', render);
+    $('#remote').addEventListener('change', render);
+    load();
+  </script>
+</body>
+</html>

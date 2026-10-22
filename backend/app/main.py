@@ -68,7 +68,7 @@ PUBLIC_PATHS = {
     "/manifest.webmanifest",
     "/assets/jobharbor-icon.svg",
 }
-PRIVATE_UI_PATHS = {"/", "/account", "/notifications", "/settings", "/assets/index.html", "/assets/profile.html", "/assets/scanner.html", "/assets/settings.html"}
+PRIVATE_UI_PATHS = {"/", "/account", "/notifications", "/settings", "/opportunities", "/assets/index.html", "/assets/profile.html", "/assets/scanner.html", "/assets/settings.html", "/assets/opportunities.html"}
 
 
 @app.middleware("http")
@@ -151,6 +151,11 @@ def notifications_page() -> FileResponse:
 @app.get("/settings", include_in_schema=False)
 def settings_page() -> FileResponse:
     return FileResponse(STATIC_DIR / "settings.html")
+
+
+@app.get("/opportunities", include_in_schema=False)
+def opportunities_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "opportunities.html")
 
 
 @app.get("/service-worker.js", include_in_schema=False)
