@@ -9,6 +9,8 @@ from io import BytesIO
 from pathlib import PurePosixPath
 
 import httpx
+import pypdfium2 as pdfium
+import pytesseract
 from docx import Document
 from pypdf import PdfReader
 
@@ -18,6 +20,7 @@ from app.schemas import CandidateProfileData
 MAX_RESUME_BYTES = 10 * 1024 * 1024
 MAX_RESUME_TEXT = 30_000
 MAX_PDF_PAGES = 100
+MAX_PDF_OCR_PAGES = 30
 MAX_DOCX_UNPACKED_BYTES = 25 * 1024 * 1024
 SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".txt"}
 
@@ -46,22 +49,52 @@ def extract_resume_text(filename: str | None, content: bytes) -> str:
         raise ResumeError("Choose a PDF, DOCX, or TXT resume file.")
 
     if extension == ".pdf":
-        if not content.startswith(b"%PDF-"):
+        # The PDF specification allows the header to appear within the first
+        # 1024 bytes, rather than requiring it at byte zero.
+        header_offset = content[:1024].find(b"%PDF-")
+        if header_offset < 0:
             raise ResumeError("This file does not appear to be a valid PDF.")
+        pdf_content = content[header_offset:]
         try:
-            reader = PdfReader(BytesIO(content), strict=False)
+            reader = PdfReader(BytesIO(pdf_content), strict=False)
             if reader.is_encrypted:
                 raise ResumeError("Password-protected PDFs are not supported.")
             if len(reader.pages) > MAX_PDF_PAGES:
                 raise ResumeError("Resumes can contain no more than 100 PDF pages.")
             chunks: list[str] = []
             total = 0
-            for page in reader.pages:
+            pages_needing_ocr: list[int] = []
+            for page_number, page in enumerate(reader.pages):
                 text = page.extract_text() or ""
                 chunks.append(text)
                 total += len(text)
+                if len(text.strip()) < 40:
+                    pages_needing_ocr.append(page_number)
                 if total >= MAX_RESUME_TEXT:
                     break
+            if pages_needing_ocr:
+                if len(pages_needing_ocr) > MAX_PDF_OCR_PAGES:
+                    raise ResumeError(
+                        "This PDF has more than 30 scanned or image-only pages. "
+                        "Please upload a shorter resume PDF."
+                    )
+                try:
+                    rendered_pdf = pdfium.PdfDocument(pdf_content)
+                    for page_number in pages_needing_ocr:
+                        image = rendered_pdf[page_number].render(scale=2).to_pil()
+                        text = pytesseract.image_to_string(image, timeout=15)
+                        chunks[page_number] = text
+                        total += len(text)
+                        if total >= MAX_RESUME_TEXT:
+                            break
+                except pytesseract.TesseractNotFoundError as exc:
+                    raise ResumeError(
+                        "Local PDF text recognition is unavailable. Rebuild the application image and try again."
+                    ) from exc
+                except RuntimeError as exc:
+                    raise ResumeError(
+                        "Reading scanned PDF pages took too long. Try a smaller or text-based PDF."
+                    ) from exc
             extracted = "\n".join(chunks)
         except ResumeError:
             raise

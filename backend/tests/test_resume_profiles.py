@@ -3,6 +3,7 @@ from io import BytesIO
 
 import httpx
 import pytest
+from pypdf import PdfWriter
 from sqlalchemy import create_engine
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -29,6 +30,56 @@ def test_rejects_unsupported_or_mislabelled_resume() -> None:
         extract_resume_text("resume.exe", b"not a resume")
     with pytest.raises(ResumeError, match="valid PDF"):
         extract_resume_text("resume.pdf", b"not a pdf")
+
+
+def test_extracts_text_from_scanned_pdf_with_local_ocr(monkeypatch) -> None:
+    writer = PdfWriter()
+    writer.add_blank_page(width=612, height=792)
+    pdf = BytesIO()
+    writer.write(pdf)
+
+    class RenderedPage:
+        def render(self, *, scale):
+            assert scale == 2
+            return SimpleNamespace(to_pil=lambda: object())
+
+    class RenderedPdf:
+        def __getitem__(self, index):
+            assert index == 0
+            return RenderedPage()
+
+    monkeypatch.setattr(resume_profiles.pdfium, "PdfDocument", lambda content: RenderedPdf())
+    monkeypatch.setattr(
+        resume_profiles.pytesseract,
+        "image_to_string",
+        lambda image, *, timeout: "Experienced software engineer with Python and cloud infrastructure skills. " * 2,
+    )
+    text = extract_resume_text("scanned.pdf", pdf.getvalue())
+    assert "software engineer" in text
+
+
+def test_accepts_pdf_header_within_allowed_prefix(monkeypatch) -> None:
+    writer = PdfWriter()
+    writer.add_blank_page(width=612, height=792)
+    pdf = BytesIO()
+    writer.write(pdf)
+
+    class RenderedPage:
+        def render(self, *, scale):
+            return SimpleNamespace(to_pil=lambda: object())
+
+    class RenderedPdf:
+        def __getitem__(self, index):
+            return RenderedPage()
+
+    monkeypatch.setattr(resume_profiles.pdfium, "PdfDocument", lambda content: RenderedPdf())
+    monkeypatch.setattr(
+        resume_profiles.pytesseract,
+        "image_to_string",
+        lambda image, *, timeout: "Experienced software engineer with Python and cloud infrastructure skills. " * 2,
+    )
+    text = extract_resume_text("prefixed.pdf", b"prefix" + pdf.getvalue())
+    assert "software engineer" in text
 
 
 def test_profile_extraction_validates_and_sanitizes_local_ai_output(monkeypatch) -> None:
