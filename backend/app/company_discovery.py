@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import ipaddress
 import re
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
+from bs4 import BeautifulSoup
 
-from app.config import settings
-
-BRAVE_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
+DUCKDUCKGO_SEARCH_URL = "https://html.duckduckgo.com/html/"
 RESULT_LIMIT = 30
 EXCLUDED_DOMAINS = {
     "linkedin.com",
@@ -114,46 +113,62 @@ def _career_page_url(url: str) -> str:
     return parsed._replace(path=path, query="", fragment="").geturl().rstrip("/")
 
 
+def _decode_search_url(value: str) -> str:
+    """Unwrap DuckDuckGo redirect links and return the destination URL."""
+    parsed = urlsplit(value)
+    if parsed.hostname and parsed.hostname.casefold().endswith("duckduckgo.com"):
+        destination = parse_qs(parsed.query).get("uddg", [None])[0]
+        if destination:
+            return destination
+    return value
+
+
+def _search_results(html: str) -> list[dict[str, str]]:
+    """Extract public web results from DuckDuckGo's lightweight HTML page."""
+    soup = BeautifulSoup(html, "html.parser")
+    results: list[dict[str, str]] = []
+    for result in soup.select(".result"):
+        link = result.select_one("a.result__a")
+        if link is None:
+            continue
+        url = link.get("href")
+        title = link.get_text(" ", strip=True)
+        if not isinstance(url, str) or not title:
+            continue
+        snippet = result.select_one(".result__snippet")
+        results.append({
+            "url": _decode_search_url(url),
+            "title": title,
+            "description": snippet.get_text(" ", strip=True) if snippet else "",
+        })
+    return results
+
+
 def discover_company_sites(role_keywords: list[str], locations: list[str]) -> list[dict[str, str]]:
     """Search the public web using only the explicitly selected role/location terms."""
-    if not settings.brave_search_api_key:
-        raise CompanyDiscoveryError(
-            "Company discovery is not configured. Add BRAVE_SEARCH_API_KEY to your .env file."
-        )
-
     headers = {
-        "Accept": "application/json",
-        "X-Subscription-Token": settings.brave_search_api_key,
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "en-US,en;q=0.8",
+        "User-Agent": "JobHarbor local job discovery/1.0",
     }
     found: dict[str, dict[str, str]] = {}
     try:
         with httpx.Client(timeout=httpx.Timeout(15.0, connect=5.0), headers=headers) as client:
             for query in _query_groups(role_keywords, locations):
-                response = client.get(
-                    BRAVE_SEARCH_URL,
-                    params={
-                        "q": query,
-                        "count": 20,
-                        "search_lang": "en",
-                        "safesearch": "moderate",
-                    },
-                )
-                if response.status_code in {401, 403}:
+                response = client.get(DUCKDUCKGO_SEARCH_URL, params={"q": query, "kl": "us-en"})
+                if response.status_code in {403, 429}:
                     raise CompanyDiscoveryError(
-                        "Brave Search rejected its API key. Check BRAVE_SEARCH_API_KEY in .env."
-                    )
-                if response.status_code == 429:
-                    raise CompanyDiscoveryError(
-                        "Brave Search rate limit reached. Discovery will retry on its next scheduled run."
+                        "DuckDuckGo temporarily limited automated searches. Discovery will retry later."
                     )
                 response.raise_for_status()
-                payload = response.json()
-                results = payload.get("web", {}).get("results", []) if isinstance(payload, dict) else []
-                if not isinstance(results, list):
-                    continue
+                results = _search_results(response.text)
+                if not results and any(marker in response.text.casefold() for marker in (
+                    "anomaly-modal", "captcha", "unusual traffic", "automated requests"
+                )):
+                    raise CompanyDiscoveryError(
+                        "DuckDuckGo presented an automated-traffic check. Discovery will retry later."
+                    )
                 for item in results:
-                    if not isinstance(item, dict):
-                        continue
                     url = item.get("url")
                     title = item.get("title")
                     description = item.get("description", "")
@@ -175,26 +190,15 @@ def discover_company_sites(role_keywords: list[str], locations: list[str]) -> li
     except CompanyDiscoveryError:
         raise
     except httpx.HTTPStatusError as exc:
-        status_code = exc.response.status_code
-        try:
-            payload = exc.response.json()
-        except ValueError:
-            payload = {}
-        error = payload.get("error", {}) if isinstance(payload, dict) else {}
-        error_code = error.get("code") if isinstance(error, dict) else None
-        if status_code in {401, 403} or error_code == "SUBSCRIPTION_TOKEN_INVALID":
-            raise CompanyDiscoveryError(
-                "Brave Search rejected the API key. Replace BRAVE_SEARCH_API_KEY with a valid subscription token."
-            ) from exc
         raise CompanyDiscoveryError(
-            f"Brave Search rejected the request (HTTP {status_code}). Check the provider response and search settings."
+            f"DuckDuckGo search returned HTTP {exc.response.status_code}. Discovery will retry later."
         ) from exc
     except httpx.TimeoutException as exc:
-        raise CompanyDiscoveryError("Brave Search timed out. Discovery will retry later.") from exc
+        raise CompanyDiscoveryError("DuckDuckGo search timed out. Discovery will retry later.") from exc
     except httpx.HTTPError as exc:
         raise CompanyDiscoveryError(
-            "Brave Search could not be reached because of a network or TLS connection error."
+            "DuckDuckGo could not be reached because of a network or TLS connection error."
         ) from exc
     except (ValueError, TypeError) as exc:
-        raise CompanyDiscoveryError("Brave Search returned an unreadable response.") from exc
+        raise CompanyDiscoveryError("DuckDuckGo returned an unreadable response.") from exc
     return list(found.values())

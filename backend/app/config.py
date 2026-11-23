@@ -12,7 +12,6 @@ class Settings(BaseSettings):
     mysql_user: str = "job_agent"
     mysql_password: str = ""
     profile_encryption_key: str = ""
-    brave_search_api_key: str = ""
     ollama_url: str = "http://localhost:11434"
     ollama_model: str = "qwen3:8b"
     scan_interval_minutes: int = Field(default=60, ge=15, le=1440)

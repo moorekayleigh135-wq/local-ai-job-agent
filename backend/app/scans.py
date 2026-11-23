@@ -49,7 +49,7 @@ def _discovery_response(db: Session, message: str | None = None) -> CompanyDisco
         .limit(50)
     ).all()
     return CompanyDiscoveryRead(
-        enabled=bool(settings.brave_search_api_key),
+        enabled=True,
         interval_hours=settings.company_discovery_interval_hours,
         last_run_at=state.last_run_at if state else None,
         message=message,
@@ -59,11 +59,6 @@ def _discovery_response(db: Session, message: str | None = None) -> CompanyDisco
 
 
 def _run_company_discovery(db: Session) -> CompanyDiscoveryRead:
-    if not settings.brave_search_api_key:
-        raise HTTPException(
-            status_code=503,
-            detail="Company discovery is not configured. Add BRAVE_SEARCH_API_KEY to your .env file.",
-        )
     preferences = db.get(SearchPreferences, 1)
     if preferences is None or not preferences.role_keywords:
         raise HTTPException(status_code=400, detail="Save at least one target role before discovering companies.")
@@ -113,8 +108,6 @@ def _run_company_discovery(db: Session) -> CompanyDiscoveryRead:
 
 def run_scheduled_company_discovery() -> None:
     """Refresh employer suggestions once per configured interval."""
-    if not settings.brave_search_api_key:
-        return
     with SessionLocal() as db:
         preferences = db.get(SearchPreferences, 1)
         if preferences is None or not preferences.role_keywords:
@@ -225,9 +218,7 @@ def list_companies(db: DatabaseSession) -> list[CareerSite]:
 
 @router.get("/discovery", response_model=CompanyDiscoveryRead)
 def get_company_discovery(db: DatabaseSession) -> CompanyDiscoveryRead:
-    message = None
-    if not settings.brave_search_api_key:
-        message = "Add BRAVE_SEARCH_API_KEY to .env to enable automatic company discovery."
+    message = "Free web search uses your saved role and location terms. Resume data stays local."
     return _discovery_response(db, message)
 
 
