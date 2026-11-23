@@ -305,7 +305,20 @@ def get_preferences(db: DatabaseSession) -> SearchPreferencesRead:
     preferences = db.get(SearchPreferences, 1)
     if preferences is None:
         return SearchPreferencesRead()
-    return SearchPreferencesRead.model_validate(preferences, from_attributes=True)
+    return _preferences_read(preferences)
+
+
+def _preferences_read(preferences: SearchPreferences) -> SearchPreferencesRead:
+    """Keep legacy preference rows within the current API list limits."""
+    return SearchPreferencesRead(
+        role_keywords=(preferences.role_keywords or [])[:20],
+        locations=(preferences.locations or [])[:20],
+        skills=(preferences.skills or [])[:50],
+        work_arrangements=(preferences.work_arrangements or [])[:3],
+        experience_level=preferences.experience_level,
+        min_match_score=preferences.min_match_score,
+        updated_at=preferences.updated_at,
+    )
 
 
 @router.put("/preferences", response_model=SearchPreferencesRead)
@@ -325,7 +338,7 @@ def save_preferences(
     preferences.min_match_score = payload.min_match_score
     db.commit()
     db.refresh(preferences)
-    return SearchPreferencesRead.model_validate(preferences, from_attributes=True)
+    return _preferences_read(preferences)
 
 
 @router.put("/preferences/threshold", response_model=SearchPreferencesRead)
@@ -340,7 +353,7 @@ def save_match_threshold(
     preferences.min_match_score = payload.min_match_score
     db.commit()
     db.refresh(preferences)
-    return SearchPreferencesRead.model_validate(preferences, from_attributes=True)
+    return _preferences_read(preferences)
 
 
 @router.get("/settings", response_model=NotificationSettingsRead)
