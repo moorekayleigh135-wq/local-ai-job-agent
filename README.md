@@ -44,7 +44,7 @@ Remote browser with Tailscale -------┘
 Services:
 - `api`: FastAPI application in `backend/`.
 - `db`: MySQL 8.4 with a persistent named volume; no host port mapping.
-- `ollama`: local model server with persistent model storage; host port bound to `127.0.0.1`.
+- `ollama`: local model server with persistent model storage, available only to the API on the private Compose network.
 
 The API needs outbound internet access for company career-page scans. Therefore, the Compose network is a normal project-specific bridge network, not an isolated `internal: true` network. The services are not intentionally published on the LAN.
 

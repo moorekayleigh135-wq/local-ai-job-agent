@@ -28,9 +28,6 @@ services:
       - ollama_data:/root/.ollama
     networks:
       - agent_network
-    ports:
-      # Local-only troubleshooting/API access; not exposed to the LAN.
-      - "127.0.0.1:11434:11434"
     # Requires a working NVIDIA host driver and NVIDIA Container Toolkit.
     deploy:
       resources:
