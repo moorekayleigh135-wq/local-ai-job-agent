@@ -4,12 +4,12 @@ from typing import Annotated
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import case, or_, select
+from sqlalchemy import case, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.job_extractor import extract_job_details
-from app.models import Job, JobScanMatch, SearchPreferences
+from app.models import Job, JobScanMatch
 from app.schemas import JobCreate, JobRead
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -47,19 +47,11 @@ def list_jobs(
     limit: int = Query(default=50, ge=1, le=50),
     offset: int = Query(default=0, ge=0),
 ) -> list[JobRead]:
-    """List manual saves and scanner jobs that meet the user's match threshold."""
+    """List manual saves and all scanned matches, including scores below alert cutoff."""
 
-    preferences = db.get(SearchPreferences, 1)
-    minimum_match = preferences.min_match_score if preferences else 40
     statement = (
         select(Job, JobScanMatch.match_score)
         .outerjoin(JobScanMatch, JobScanMatch.job_id == Job.id)
-        .where(
-            or_(
-                JobScanMatch.id.is_(None),
-                JobScanMatch.match_score >= minimum_match,
-            )
-        )
         .order_by(
             case((JobScanMatch.match_score.is_(None), 1), else_=0),
             JobScanMatch.match_score.desc(),

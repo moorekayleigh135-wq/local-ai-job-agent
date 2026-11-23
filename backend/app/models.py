@@ -1,7 +1,7 @@
 """SQLAlchemy models for job postings."""
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -19,10 +19,15 @@ class Job(Base):
     location: Mapped[str | None] = mapped_column(String(255), nullable=True)
     employment_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
     job_level: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    salary_min: Mapped[float | None] = mapped_column(Float, nullable=True)
+    salary_max: Mapped[float | None] = mapped_column(Float, nullable=True)
+    salary_currency: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    salary_interval: Mapped[str | None] = mapped_column(String(24), nullable=True)
     work_arrangement: Mapped[str | None] = mapped_column(String(50), nullable=True)
     external_id: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
     source_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     description: Mapped[str] = mapped_column(Text, nullable=False)
+    posted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     skills: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     qualifications: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     created_at: Mapped[datetime] = mapped_column(

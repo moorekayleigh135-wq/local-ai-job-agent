@@ -17,6 +17,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 from app.job_matcher import score_postings_locally
+from app.ats_sources import public_ats_postings
 
 BOT_NAME = "JobHarborJobFinder"
 USER_AGENT = "JobHarborJobFinder/0.1 (user-directed career-page scanner)"
@@ -56,6 +57,10 @@ class ScannedPosting:
     location: str | None = None
     employment_type: str | None = None
     experience_compatibility: int | None = None
+    salary_min: float | None = None
+    salary_max: float | None = None
+    salary_currency: str | None = None
+    salary_interval: str | None = None
 
 
 def _parse_posted_at(value: object) -> datetime | None:
@@ -329,6 +334,32 @@ def _job_location(record: dict) -> str | None:
     value = record.get("jobLocation") or record.get("location")
     text = " ".join(_flatten_text(value).split())
     return text[:255] or None
+
+
+def _job_salary(record: dict) -> tuple[float | None, float | None, str | None, str | None]:
+    """Normalize schema.org or ATS compensation data without inventing a range."""
+    raw = record.get("baseSalary") or record.get("salaryRange") or record.get("compensation")
+    if not isinstance(raw, dict):
+        return None, None, None, None
+    currency = raw.get("currency") or raw.get("currencyCode")
+    value = raw.get("value", raw)
+    if isinstance(value, dict):
+        minimum = value.get("minValue") or value.get("min")
+        maximum = value.get("maxValue") or value.get("max")
+        interval = value.get("unitText") or value.get("interval")
+    else:
+        minimum = maximum = value
+        interval = raw.get("interval")
+    try:
+        minimum = float(minimum) if minimum is not None else None
+        maximum = float(maximum) if maximum is not None else None
+    except (TypeError, ValueError):
+        minimum = maximum = None
+    return (
+        minimum, maximum,
+        str(currency).upper()[:8] if currency else None,
+        str(interval).casefold()[:24] if interval else None,
+    )
 
 
 def _months_of_experience(value: object) -> float | None:
@@ -840,6 +871,91 @@ def _score_posting(
     return round(100 * score / configured_weight), matched[:50]
 
 
+def _score_posting_batch(postings: list[ScannedPosting], preferences: dict) -> bool:
+    """Apply local AI fit and enforce the resume-derived role/level gates."""
+    fits = score_postings_locally(postings, preferences)
+    if fits is not None:
+        for index, fit in fits.items():
+            posting = postings[index]
+            experience_fit = fit.experience_fit
+            if posting.experience_compatibility is not None:
+                experience_fit = min(experience_fit, posting.experience_compatibility)
+            posting.score = round(
+                fit.role_fit * 0.40 + fit.skills_fit * 0.30
+                + experience_fit * 0.20 + fit.preference_fit * 0.10
+            )
+            if posting.experience_compatibility is not None:
+                posting.score = min(posting.score, posting.experience_compatibility)
+            posting.matched_terms = [
+                *fit.matched_evidence,
+                f"Role fit {fit.role_fit}%",
+                f"Experience fit {experience_fit}%",
+            ]
+    for posting in postings:
+        if preferences.get("role_keywords") and not any(
+            _role_matches_title(role, posting.title)
+            for role in preferences["role_keywords"]
+        ):
+            posting.score = 0
+            posting.matched_terms = []
+            continue
+        if posting.experience_compatibility is not None:
+            posting.score = min(posting.score, posting.experience_compatibility)
+    return fits is not None
+
+
+def _scan_public_ats_feed(
+    client: httpx.Client, site_url: str, preferences: dict, max_age_days: int
+) -> tuple[list[ScannedPosting], list[str]] | None:
+    """Convert listed Greenhouse, Lever, and Ashby jobs to local matches."""
+    feed = public_ats_postings(client, site_url)
+    if feed is None:
+        return None
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=max_age_days)
+    roles = preferences.get("role_keywords", [])
+    candidates: list[ScannedPosting] = []
+    for item in feed:
+        title = item["title"]
+        if roles and not any(_role_matches_title(role, title) for role in roles):
+            continue
+        posted_at = _parse_posted_at(item.get("datePosted"))
+        if posted_at is not None and not (cutoff <= posted_at <= now):
+            continue
+        description = item.get("description") or title
+        record = {
+            "experienceLevel": item.get("jobLevel"),
+            "experienceRequirements": item.get("experienceRequirements"),
+        }
+        job_level, required_years = _job_experience(record, title, description)
+        experience_compatibility = _experience_score(
+            preferences.get("candidate_years_experience"), required_years,
+            job_level, preferences.get("effective_experience_level") or preferences.get("experience_level"),
+        )
+        score, terms = _score_posting(
+            title, " ".join((description, item.get("location") or "")), preferences,
+            job_level=job_level, required_years=required_years,
+        )
+        candidates.append(ScannedPosting(
+            url=item["url"], title=title, description=description, score=score,
+            matched_terms=terms, posted_at=posted_at, external_id=item.get("external_id"),
+            job_level=job_level, location=item.get("location"),
+            employment_type=item.get("employmentType"),
+            experience_compatibility=experience_compatibility,
+            salary_min=item.get("salary_min"), salary_max=item.get("salary_max"),
+            salary_currency=item.get("salary_currency"), salary_interval=item.get("salary_interval"),
+        ))
+    candidates.sort(key=lambda posting: posting.posted_at or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+    candidates = candidates[:MAX_JOB_PAGES]
+    warnings: list[str] = []
+    if not candidates:
+        warnings.append("The public ATS feed returned no postings that match the resume-derived role families.")
+        return candidates, warnings
+    if not _score_posting_batch(candidates, preferences):
+        warnings.append("Local AI scoring was unavailable; keyword-based scores were used for this scan.")
+    return candidates, warnings
+
+
 def scan_career_site(
     site_url: str, preferences: dict, posting_max_age_days: int = 30
 ) -> tuple[list[ScannedPosting], int, list[str]]:
@@ -857,6 +973,13 @@ def scan_career_site(
         robots, delay = _robots(client, site_url)
         if not robots.can_fetch(BOT_NAME, site_url):
             raise ScanError("robots.txt disallows scanning this careers page.")
+        if not _is_direct_job_url(site_url):
+            public_feed = _scan_public_ats_feed(
+                client, site_url, preferences, posting_max_age_days
+            )
+            if public_feed is not None:
+                feed_postings, feed_warnings = public_feed
+                return feed_postings, 0, feed_warnings
         if _is_direct_job_url(site_url):
             candidates = [Candidate(site_url, "Job posting", "")]
         else:
@@ -1041,6 +1164,7 @@ def scan_career_site(
                 role_context = _flatten_text(record.get("occupationalCategory"))
                 location = _job_location(record)
                 employment_type = _flatten_text(record.get("employmentType"))[:100] or None
+                salary_min, salary_max, salary_currency, salary_interval = _job_salary(record)
                 description_for_match = " ".join((candidate.description, description, location or "", role_context))
                 score, terms = _score_posting(
                     title, description_for_match, preferences,
@@ -1058,6 +1182,7 @@ def scan_career_site(
                             job_level, preferences.get("effective_experience_level")
                             or preferences.get("experience_level"),
                         ),
+                        salary_min, salary_max, salary_currency, salary_interval,
                     )
                 )
             except ScanError as exc:
@@ -1068,41 +1193,8 @@ def scan_career_site(
             errors.append(
                 f"Skipped {unverified} listing(s): the actual posting page did not verify a JobPosting record dated within the last {posting_max_age_days} days."
             )
-        fits = score_postings_locally(postings, preferences)
-        if fits is None:
+        if not _score_posting_batch(postings, preferences):
             errors.append("Local AI scoring was unavailable; keyword-based scores were used for this scan.")
-        else:
-            for index, fit in fits.items():
-                posting = postings[index]
-                experience_fit = fit.experience_fit
-                if posting.experience_compatibility is not None:
-                    experience_fit = min(experience_fit, posting.experience_compatibility)
-                posting.score = round(
-                    fit.role_fit * 0.40
-                    + fit.skills_fit * 0.30
-                    + experience_fit * 0.20
-                    + fit.preference_fit * 0.10
-                )
-                if posting.experience_compatibility is not None:
-                    posting.score = min(posting.score, posting.experience_compatibility)
-                posting.matched_terms = [
-                    *fit.matched_evidence,
-                    f"Role fit {fit.role_fit}%",
-                    f"Experience fit {experience_fit}%",
-                ]
-        for posting in postings:
-            # The model may use skills and description context to over-credit
-            # a related but different job family. A target-title mismatch is
-            # a hard fail and cannot be rescued by the AI score.
-            if preferences.get("role_keywords") and not any(
-                _role_matches_title(role, posting.title)
-                for role in preferences["role_keywords"]
-            ):
-                posting.score = 0
-                posting.matched_terms = []
-                continue
-            if posting.experience_compatibility is not None:
-                posting.score = min(posting.score, posting.experience_compatibility)
         if not_found:
             errors.append(
                 f"{not_found} posting link(s) returned 404 or 410. The source may have removed or moved those jobs; only live source pages are kept."

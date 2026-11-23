@@ -149,11 +149,12 @@ or remote, hybrid, or onsite preferences.
 Return exactly one JSON object with these keys:
 - headline: string or null
 - professional_summary: string or null
-- years_experience: number or null
+- years_experience: years of non-internship professional experience only, or null (internships and school progress are counted separately by the app)
 - skills: array of strings
-- role_keywords: array of strings
-- experience: array of objects with title, company, dates, highlights (string array)
-- education: array of objects with institution, credential, dates
+- role_keywords: array of up to 8 distinct, related role families supported by the candidate's skills, education, projects, and experience; include common adjacent titles/synonyms where evidence supports them, but do not add unrelated fields
+- majors_interests: array of up to 8 majors, academic subjects, and career-interest areas supported by the resume
+- experience: array of objects with title, company, dates, kind (internship, part-time, full-time, academic project, or other), highlights (string array)
+- education: array of objects with institution, credential, dates, year_level (freshman, sophomore, junior, senior, graduate, or null)
 - certifications: array of strings
 
 RESUME TEXT:
@@ -217,14 +218,15 @@ RESUME TEXT:
     # Keep malformed or overly verbose model output within the response schema.
     for key, limit in {
         "skills": 100,
-        "role_keywords": 20,
+        "role_keywords": 8,
+        "majors_interests": 8,
         "experience": 30,
         "education": 20,
         "certifications": 50,
     }.items():
         value = raw_profile.get(key)
         raw_profile[key] = value[:limit] if isinstance(value, list) else []
-    for key in ("skills", "role_keywords", "certifications"):
+    for key in ("skills", "role_keywords", "majors_interests", "certifications"):
         raw_profile[key] = [" ".join(item.split())[:200] for item in raw_profile[key] if isinstance(item, str) and item.strip()]
     for key in ("experience", "education"):
         raw_profile[key] = [item for item in raw_profile[key] if isinstance(item, dict)]

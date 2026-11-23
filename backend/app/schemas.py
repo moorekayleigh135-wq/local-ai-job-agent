@@ -9,6 +9,7 @@ class ExperienceItem(BaseModel):
     title: str | None = Field(default=None, max_length=200)
     company: str | None = Field(default=None, max_length=200)
     dates: str | None = Field(default=None, max_length=100)
+    kind: str | None = Field(default=None, max_length=40)
     highlights: list[str] = Field(default_factory=list, max_length=8)
 
 
@@ -16,6 +17,7 @@ class EducationItem(BaseModel):
     institution: str | None = Field(default=None, max_length=200)
     credential: str | None = Field(default=None, max_length=200)
     dates: str | None = Field(default=None, max_length=100)
+    year_level: str | None = Field(default=None, max_length=40)
 
 
 class CandidateProfileData(BaseModel):
@@ -24,6 +26,7 @@ class CandidateProfileData(BaseModel):
     years_experience: float | None = Field(default=None, ge=0, le=80)
     skills: list[str] = Field(default_factory=list, max_length=100)
     role_keywords: list[str] = Field(default_factory=list, max_length=20)
+    majors_interests: list[str] = Field(default_factory=list, max_length=20)
     experience: list[ExperienceItem] = Field(default_factory=list, max_length=30)
     education: list[EducationItem] = Field(default_factory=list, max_length=20)
     certifications: list[str] = Field(default_factory=list, max_length=50)
@@ -32,6 +35,7 @@ class CandidateProfileRead(BaseModel):
     filename: str
     profile: CandidateProfileData
     inferred_experience_level: str | None = None
+    inferred_experience_years: float | None = None
     updated_at: datetime
 
 
@@ -49,10 +53,15 @@ class JobRead(BaseModel):
     location: str | None
     employment_type: str | None
     job_level: str | None
+    salary_min: float | None = None
+    salary_max: float | None = None
+    salary_currency: str | None = None
+    salary_interval: str | None = None
     work_arrangement: str | None
     external_id: str | None
     source_url: str | None
     description: str
+    posted_at: datetime | None = None
     skills: list[str]
     qualifications: list[str]
     created_at: datetime
@@ -155,6 +164,10 @@ class JobNotificationRead(BaseModel):
     job_id: int
     job_title: str | None
     job_level: str | None
+    salary_min: float | None = None
+    salary_max: float | None = None
+    salary_currency: str | None = None
+    salary_interval: str | None = None
     location: str | None
     external_id: str | None
     company: str | None

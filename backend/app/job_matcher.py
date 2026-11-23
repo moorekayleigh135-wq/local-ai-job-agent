@@ -8,6 +8,7 @@ import httpx
 from pydantic import BaseModel, Field
 
 from app.config import settings
+from app.experience import candidate_years_experience
 
 
 class PostingFit(BaseModel):
@@ -39,17 +40,29 @@ def score_postings_locally(
     compact_profile = {
         "headline": candidate.get("headline"),
         "summary": str(candidate.get("professional_summary") or "")[:1800],
-        "years_experience": candidate.get("years_experience"),
+        "years_experience": candidate_years_experience(candidate),
         "skills": list_value(candidate, "skills", 30),
         "role_keywords": list_value(candidate, "role_keywords", 15),
+        "majors_interests": list_value(candidate, "majors_interests", 12),
         "experience": [
             {
                 "title": item.get("title"),
+                "kind": item.get("kind"),
+                "dates": item.get("dates"),
                 "highlights": [
                     str(value)[:200] for value in list_value(item, "highlights", 3)
                 ],
             }
             for item in list_value(candidate, "experience", 8)
+            if isinstance(item, dict)
+        ],
+        "education": [
+            {
+                "credential": item.get("credential"),
+                "year_level": item.get("year_level"),
+                "dates": item.get("dates"),
+            }
+            for item in list_value(candidate, "education", 8)
             if isinstance(item, dict)
         ],
     }
@@ -65,7 +78,7 @@ def score_postings_locally(
         }
         for index, posting in enumerate(postings)
     ]
-    prompt = f"""Assess fit for these already source-verified job postings. Use only evidence in the candidate profile, search preferences, and posting text. Do not invent experience or qualifications. Treat listed target roles as alternatives. A role should score highly only when its work is meaningfully related to the candidate's target roles or demonstrated experience. Compare seniority and years requirements; do not reject a role solely for one missing preferred skill.
+    prompt = f"""Assess fit for these current, source-verified job postings. Use only evidence in the candidate profile, search preferences, and posting text. Do not invent experience or qualifications. Treat listed target role families as alternatives. Use education majors, academic projects, internships, and work history to understand the person's interests and actual skill level. Count internships and school progress as relevant early-career experience; do not treat a student as having no experience. A role should score highly only when its work is meaningfully related to the candidate's role families, study interests, or demonstrated experience. Compare seniority and stated years requirements; do not reject a role solely for one missing preferred skill.
 
 Return one result for each input index. Give four 0-100 component scores: role_fit, skills_fit, experience_fit, preference_fit. Use 50 for a component that the posting does not disclose. matched_evidence must be short phrases explicitly supported by both sides. Do not write prose outside the JSON.
 

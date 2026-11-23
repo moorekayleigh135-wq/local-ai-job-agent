@@ -139,6 +139,23 @@ def migrate_job_external_id(database_engine=engine) -> None:
             connection.execute(text("CREATE INDEX ix_jobs_external_id ON jobs (external_id)"))
 
 
+def migrate_job_salary(database_engine=engine) -> None:
+    """Add optional salary and source posting-date fields."""
+    columns = {column["name"] for column in inspect(database_engine).get_columns("jobs")}
+    definitions = {
+        "salary_min": "FLOAT NULL",
+        "salary_max": "FLOAT NULL",
+        "salary_currency": "VARCHAR(8) NULL",
+        "salary_interval": "VARCHAR(24) NULL",
+        "posted_at": "DATETIME NULL",
+    }
+    missing = [(name, definition) for name, definition in definitions.items() if name not in columns]
+    if missing:
+        with database_engine.begin() as connection:
+            for name, definition in missing:
+                connection.execute(text(f"ALTER TABLE jobs ADD COLUMN {name} {definition}"))
+
+
 def migrate_search_experience_level(database_engine=engine) -> None:
     """Add the encrypted target experience level to older search profiles."""
     columns = {column["name"] for column in inspect(database_engine).get_columns("search_preferences")}

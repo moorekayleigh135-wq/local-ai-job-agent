@@ -2,8 +2,9 @@
 
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
+from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response, status
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -16,7 +17,7 @@ from app.company_discovery import (
 )
 from app.config import settings
 from app.database import SessionLocal, get_db
-from app.experience import target_experience_level
+from app.experience import candidate_years_experience, target_experience_level
 from app.models import (
     BrowserPushSubscription, CareerSite, CandidateProfile, CompanyDiscoveryState,
     DiscoveredCareerSite, Job, JobNotification, JobScanMatch,
@@ -45,6 +46,7 @@ from app.schemas import (
 
 router = APIRouter(prefix="/scanner", tags=["company scanner"])
 DatabaseSession = Annotated[Session, Depends(get_db)]
+AUTO_MONITOR_PER_DISCOVERY = 5
 
 
 def _discovery_response(db: Session, message: str | None = None) -> CompanyDiscoveryRead:
@@ -61,6 +63,10 @@ def _discovery_response(db: Session, message: str | None = None) -> CompanyDisco
         .limit(50)
     ).all()
     suggestions = [item for item in suggestions if not is_excluded_company_url(item.url)]
+    monitored_urls = {
+        site.url.rstrip("/").casefold() for site in db.scalars(select(CareerSite)).all()
+    }
+    suggestions = [item for item in suggestions if item.url.rstrip("/").casefold() not in monitored_urls]
     return CompanyDiscoveryRead(
         enabled=True,
         interval_hours=settings.company_discovery_interval_hours,
@@ -73,8 +79,17 @@ def _discovery_response(db: Session, message: str | None = None) -> CompanyDisco
 
 def _run_company_discovery(db: Session) -> CompanyDiscoveryRead:
     preferences = db.get(SearchPreferences, 1)
-    if preferences is None or not preferences.role_keywords:
-        raise HTTPException(status_code=400, detail="Save at least one target role before discovering companies.")
+    candidate_profile_row = db.get(CandidateProfile, 1)
+    candidate_profile = {}
+    if candidate_profile_row and isinstance(candidate_profile_row.profile_data, dict):
+        candidate_profile = candidate_profile_row.profile_data.get("profile", candidate_profile_row.profile_data)
+    profile_roles = (
+        candidate_profile.get("role_keywords", []) or candidate_profile.get("majors_interests", [])
+        if isinstance(candidate_profile, dict) else []
+    )
+    role_keywords = profile_roles or (preferences.role_keywords if preferences else [])
+    if not role_keywords:
+        raise HTTPException(status_code=400, detail="Upload a resume or add target roles before discovering companies.")
 
     state = db.get(CompanyDiscoveryState, 1)
     if state is None:
@@ -84,14 +99,12 @@ def _run_company_discovery(db: Session) -> CompanyDiscoveryRead:
     state.last_error = None
     db.commit()
 
-    candidate_profile_row = db.get(CandidateProfile, 1)
-    candidate_profile = {}
-    if candidate_profile_row and isinstance(candidate_profile_row.profile_data, dict):
-        candidate_profile = candidate_profile_row.profile_data.get("profile", candidate_profile_row.profile_data)
-    experience_level = target_experience_level(candidate_profile, preferences.experience_level)
+    experience_level = target_experience_level(
+        candidate_profile, preferences.experience_level if preferences else None
+    )
     try:
         results = discover_company_sites(
-            preferences.role_keywords, preferences.locations, experience_level
+            role_keywords, preferences.locations if preferences else [], experience_level
         )
     except CompanyDiscoveryError as exc:
         state.last_error = str(exc)
@@ -108,9 +121,15 @@ def _run_company_discovery(db: Session) -> CompanyDiscoveryRead:
     ).all():
         if previous.url.rstrip("/").casefold() not in result_urls:
             db.delete(previous)
+    added_this_run = 0
     for item in results:
         url = item["url"].rstrip("/")
         if url.casefold() in watched_urls:
+            continue
+        if added_this_run < AUTO_MONITOR_PER_DISCOVERY:
+            db.add(CareerSite(name=item["name"][:120], url=url[:512]))
+            watched_urls.add(url.casefold())
+            added_this_run += 1
             continue
         candidate = db.scalar(select(DiscoveredCareerSite).where(DiscoveredCareerSite.url == url))
         if candidate is None:
@@ -129,23 +148,43 @@ def _run_company_discovery(db: Session) -> CompanyDiscoveryRead:
         )
     )
     db.commit()
-    return _discovery_response(db, "Company suggestions refreshed.")
+    return _discovery_response(
+        db,
+        f"Discovery refreshed. {added_this_run} employer sources were added to the automatic scan queue."
+        if added_this_run else "Discovery refreshed.",
+    )
 
 
 def run_scheduled_company_discovery() -> None:
     """Refresh employer suggestions once per configured interval."""
     with SessionLocal() as db:
         preferences = db.get(SearchPreferences, 1)
-        if preferences is None or not preferences.role_keywords:
+        profile_row = db.get(CandidateProfile, 1)
+        stored_profile = profile_row.profile_data if profile_row else {}
+        profile = stored_profile.get("profile", stored_profile) if isinstance(stored_profile, dict) else {}
+        profile_roles = (
+            profile.get("role_keywords", []) or profile.get("majors_interests", [])
+            if isinstance(profile, dict) else []
+        )
+        if preferences is None and not profile_roles:
+            return
+        if preferences is not None and not (preferences.role_keywords or profile_roles):
             return
         state = db.get(CompanyDiscoveryState, 1)
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         if state is not None and state.last_run_at is not None:
             elapsed = now - state.last_run_at
+            profile_changed = bool(
+                profile_row and profile_row.updated_at
+                and profile_row.updated_at > state.last_run_at
+            ) or bool(
+                preferences and preferences.updated_at
+                and preferences.updated_at > state.last_run_at
+            )
             # Failed provider calls get a short retry window; successful searches
             # use the configured discovery interval to keep API usage predictable.
             interval_hours = 1 if state.last_error else settings.company_discovery_interval_hours
-            if elapsed.total_seconds() < interval_hours * 3600:
+            if not profile_changed and elapsed.total_seconds() < interval_hours * 3600:
                 return
         try:
             _run_company_discovery(db)
@@ -249,12 +288,25 @@ def get_company_discovery(db: DatabaseSession) -> CompanyDiscoveryRead:
 
 
 @router.post("/discovery/run", response_model=CompanyDiscoveryRead)
-def discover_companies_now(db: DatabaseSession) -> CompanyDiscoveryRead:
-    return _run_company_discovery(db)
+def discover_companies_now(
+    background_tasks: BackgroundTasks, db: DatabaseSession
+) -> CompanyDiscoveryRead:
+    result = _run_company_discovery(db)
+    background_tasks.add_task(_scan_after_discovery)
+    return result
+
+
+def _scan_after_discovery() -> None:
+    """Kick off scans after an interactive discovery refresh without blocking the page."""
+    from app.scheduler import run_scheduled_scans
+
+    run_scheduled_scans()
 
 
 @router.post("/discovery/{suggestion_id}/monitor", response_model=CareerSiteRead)
-def monitor_discovered_company(suggestion_id: int, db: DatabaseSession) -> CareerSiteRead:
+def monitor_discovered_company(
+    suggestion_id: int, background_tasks: BackgroundTasks, db: DatabaseSession
+) -> CareerSiteRead:
     suggestion = db.get(DiscoveredCareerSite, suggestion_id)
     if suggestion is None:
         raise HTTPException(status_code=404, detail="Company suggestion not found.")
@@ -265,6 +317,7 @@ def monitor_discovered_company(suggestion_id: int, db: DatabaseSession) -> Caree
     db.delete(suggestion)
     db.commit()
     db.refresh(site)
+    background_tasks.add_task(_scan_after_discovery)
     return site
 
 
@@ -391,9 +444,6 @@ def list_matches(
         .order_by(JobScanMatch.match_score.desc(), JobScanMatch.scanned_at.desc())
         .limit(limit)
     )
-    preferences = db.get(SearchPreferences, 1)
-    if preferences is not None:
-        query = query.where(JobScanMatch.match_score >= preferences.min_match_score)
     rows = db.execute(query).all()
     return [
         ScannedJobRead(
@@ -433,6 +483,10 @@ def list_notifications(
             job_id=job.id,
             job_title=job.title,
             job_level=job.job_level,
+            salary_min=job.salary_min,
+            salary_max=job.salary_max,
+            salary_currency=job.salary_currency,
+            salary_interval=job.salary_interval,
             location=job.location,
             external_id=job.external_id,
             company=job.company,
@@ -465,37 +519,45 @@ def scan_company(company_id: int, db: DatabaseSession) -> ScanSummary:
     site = db.get(CareerSite, company_id)
     if site is None:
         raise HTTPException(status_code=404, detail="Company not found.")
+    source_host = (urlsplit(site.url).hostname or "").casefold()
+    if source_host == "linkedin.com" or source_host.endswith(".linkedin.com"):
+        raise HTTPException(status_code=400, detail="LinkedIn requires its signed-in job search and does not permit automated listing scraping. Use the LinkedIn search link instead.")
+    if source_host in {"handshake.com", "joinhandshake.com"} or source_host.endswith((".handshake.com", ".joinhandshake.com")):
+        raise HTTPException(status_code=400, detail="Handshake listings require signed-in access and its terms prohibit automated scraping. Use the Handshake Jobs link instead.")
     preferences = db.get(SearchPreferences, 1)
-    if preferences is None or not any(
-        [preferences.role_keywords, preferences.locations, preferences.skills, preferences.work_arrangements]
-    ):
-        raise HTTPException(status_code=400, detail="Save at least one search preference before scanning.")
-    preference_data = {
-        "role_keywords": preferences.role_keywords,
-        "locations": preferences.locations,
-        "skills": preferences.skills,
-        "work_arrangements": preferences.work_arrangements,
-        "experience_level": preferences.experience_level,
-        "min_match_score": preferences.min_match_score,
-    }
     candidate_profile_row = db.get(CandidateProfile, 1)
-    profile = {}
-    if candidate_profile_row and isinstance(candidate_profile_row.profile_data, dict):
-        profile = candidate_profile_row.profile_data.get("profile", candidate_profile_row.profile_data)
+    stored_profile = candidate_profile_row.profile_data if candidate_profile_row else {}
+    profile = stored_profile.get("profile", stored_profile) if isinstance(stored_profile, dict) else {}
+    profile_roles = (
+        profile.get("role_keywords", []) or profile.get("majors_interests", [])
+        if isinstance(profile, dict) else []
+    )
+    if preferences is None and not profile_roles:
+        raise HTTPException(status_code=400, detail="Upload a resume or save a search profile before scanning.")
+    if preferences is not None and not any(
+        [preferences.role_keywords, preferences.locations, preferences.skills, preferences.work_arrangements, profile_roles]
+    ):
+        raise HTTPException(status_code=400, detail="Upload a resume or save a search profile before scanning.")
+    preference_data = {
+        "role_keywords": profile_roles or (preferences.role_keywords if preferences else []),
+        "locations": preferences.locations if preferences else [],
+        "skills": preferences.skills if preferences else [],
+        "work_arrangements": preferences.work_arrangements if preferences else [],
+        "experience_level": preferences.experience_level if preferences else "any",
+        "min_match_score": preferences.min_match_score if preferences else 40,
+    }
     if isinstance(profile, dict):
-        # Explicit search targets define role relevance. Resume titles are
-        # candidate evidence for scoring, not additional roles to search for.
         profile_skills = [
             value.strip() for value in profile.get("skills", [])
             if isinstance(value, str) and value.strip()
         ]
         preference_data["skills"] = list(dict.fromkeys(
-            [*preferences.skills, *profile_skills[:20]]
+            [*(preferences.skills if preferences else []), *profile_skills[:20]]
         ))
-        preference_data["candidate_years_experience"] = profile.get("years_experience")
+        preference_data["candidate_years_experience"] = candidate_years_experience(profile)
         preference_data["candidate_profile"] = profile
     preference_data["effective_experience_level"] = target_experience_level(
-        profile, preferences.experience_level
+        profile, preferences.experience_level if preferences else None
     )
     try:
         postings, skipped_count, warnings = scan_career_site(
@@ -520,7 +582,8 @@ def scan_company(company_id: int, db: DatabaseSession) -> ScanSummary:
     remaining_alerts = max(0, daily_limit - daily_count)
     freshness_cutoff = now - timedelta(hours=settings.new_job_window_hours)
     for posting in postings:
-        qualifies = posting.score >= preferences.min_match_score
+        minimum_match = preferences.min_match_score if preferences else 40
+        qualifies = posting.score >= minimum_match
         if qualifies:
             matched_count += 1
         else:
@@ -535,10 +598,15 @@ def scan_company(company_id: int, db: DatabaseSession) -> ScanSummary:
                 company=site.name,
                 external_id=posting.external_id,
                 job_level=posting.job_level,
+                salary_min=posting.salary_min,
+                salary_max=posting.salary_max,
+                salary_currency=posting.salary_currency,
+                salary_interval=posting.salary_interval,
                 location=posting.location,
                 employment_type=posting.employment_type,
                 source_url=posting.url,
                 description=posting.description,
+                posted_at=(posting.posted_at.astimezone(timezone.utc).replace(tzinfo=None) if posting.posted_at else None),
                 skills=[],
                 qualifications=[],
             )
@@ -550,10 +618,15 @@ def scan_company(company_id: int, db: DatabaseSession) -> ScanSummary:
             job.company = site.name
             job.external_id = posting.external_id or job.external_id
             job.job_level = posting.job_level
+            job.salary_min = posting.salary_min
+            job.salary_max = posting.salary_max
+            job.salary_currency = posting.salary_currency
+            job.salary_interval = posting.salary_interval
             job.location = posting.location
             job.employment_type = posting.employment_type
             job.source_url = posting.url
             job.description = posting.description
+            job.posted_at = posting.posted_at.astimezone(timezone.utc).replace(tzinfo=None) if posting.posted_at else None
             updated_count += 1
 
         match = db.scalar(select(JobScanMatch).where(JobScanMatch.job_id == job.id))
@@ -576,9 +649,7 @@ def scan_company(company_id: int, db: DatabaseSession) -> ScanSummary:
             posting.posted_at is not None
             and freshness_cutoff <= posting.posted_at <= now
         )
-        newly_qualifies = (
-            previous_score is not None and previous_score < preferences.min_match_score
-        )
+        newly_qualifies = previous_score is not None and previous_score < minimum_match
         already_alerted = db.scalar(
             select(JobNotification.id).where(JobNotification.job_id == job.id).limit(1)
         ) is not None

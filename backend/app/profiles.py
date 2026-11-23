@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.experience import infer_experience_level
+from app.experience import candidate_years_experience, infer_experience_level
 from app.models import CandidateProfile, SearchPreferences
 from app.resume_profiles import (
     MAX_RESUME_BYTES,
@@ -19,6 +19,23 @@ from app.schemas import CandidateProfileRead, SearchPreferencesRead
 router = APIRouter(prefix="/profile", tags=["candidate profile"])
 
 
+def _sync_resume_preferences(db: Session, profile: dict) -> None:
+    """Use local resume-derived role families and skills without a manual step."""
+    preferences = db.get(SearchPreferences, 1)
+    if preferences is None:
+        preferences = SearchPreferences(id=1)
+        db.add(preferences)
+    roles = profile.get("role_keywords", []) or profile.get("majors_interests", [])
+    skills = profile.get("skills", [])
+    preferences.role_keywords = list(dict.fromkeys(
+        value.strip() for value in roles if isinstance(value, str) and value.strip()
+    ))[:20]
+    existing_skills = [value for value in (preferences.skills or []) if isinstance(value, str)]
+    preferences.skills = list(dict.fromkeys(
+        [*existing_skills, *(value.strip() for value in skills if isinstance(value, str) and value.strip())]
+    ))[:50]
+
+
 def _profile_response(record: CandidateProfile) -> dict:
     stored = record.profile_data
     if isinstance(stored, dict) and "profile" in stored:
@@ -31,6 +48,7 @@ def _profile_response(record: CandidateProfile) -> dict:
         "filename": filename,
         "profile": profile,
         "inferred_experience_level": infer_experience_level(profile),
+        "inferred_experience_years": candidate_years_experience(profile),
         "updated_at": record.updated_at,
     }
 
@@ -75,6 +93,8 @@ def upload_resume(
         record.profile_data = {"filename": filename, "profile": profile.model_dump(mode="json")}
     db.commit()
     db.refresh(record)
+    _sync_resume_preferences(db, profile.model_dump(mode="json"))
+    db.commit()
     return _profile_response(record)
 
 
@@ -92,14 +112,7 @@ def apply_profile_to_search(db: Session = Depends(get_db)) -> SearchPreferences:
 
     stored = profile.profile_data
     additions = stored.get("profile", stored) if isinstance(stored, dict) else {}
-    for field, maximum in (("role_keywords", 20), ("skills", 50)):
-        existing = list(getattr(preferences, field) or [])
-        seen = {value.casefold() for value in existing}
-        for value in additions.get(field, []):
-            if isinstance(value, str) and value.strip() and value.casefold() not in seen:
-                existing.append(value.strip())
-                seen.add(value.casefold())
-        setattr(preferences, field, existing[:maximum])
+    _sync_resume_preferences(db, additions)
 
     db.commit()
     db.refresh(preferences)
