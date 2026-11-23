@@ -12,11 +12,6 @@ from app.config import settings
 SEARXNG_SEARCH_PATH = "/search"
 RESULT_LIMIT = 30
 EXCLUDED_DOMAINS = {
-    "linkedin.com",
-    "indeed.com",
-    "glassdoor.com",
-    "ziprecruiter.com",
-    "handshake.com",
     "simplyhired.com",
     "monster.com",
     "careerbuilder.com",
@@ -51,7 +46,10 @@ def _query_groups(role_keywords: list[str], locations: list[str]) -> list[str]:
     queries: list[str] = []
     for group in role_groups:
         group_clause = " OR ".join(phrase(term) for term in group)
-        q = f'("careers" OR "jobs") ({group_clause})'
+        # Search results are discovery hints only. The scanner verifies each
+        # individual posting directly at its employer/board URL before saving
+        # or alerting; snippets and AI summaries are never treated as evidence.
+        q = f'("careers" OR "jobs" OR "job openings" OR "job posting") ({group_clause})'
         if location_clause:
             q += f" ({location_clause})"
         queries.append(q)
@@ -105,6 +103,12 @@ def _career_page_url(url: str) -> str:
         segments = segments[:1]
     elif matches_domain("myworkdayjobs.com"):
         segments = segments[:2]
+    elif matches_domain("linkedin.com") or matches_domain("indeed.com"):
+        segments = ["jobs"]
+    elif matches_domain("handshake.com"):
+        segments = ["jobs"]
+    elif matches_domain("glassdoor.com"):
+        segments = ["Job"]
     for index, segment in enumerate(segments):
         if segment.casefold() in CAREER_PATH_HINTS and not matches_domain("myworkdayjobs.com"):
             segments = segments[:index + 1]
@@ -125,7 +129,13 @@ def discover_company_sites(role_keywords: list[str], locations: list[str]) -> li
             for query in _query_groups(role_keywords, locations):
                 response = client.get(
                     search_url,
-                    params={"q": query, "format": "json", "categories": "general", "language": "en"},
+                    params={
+                        "q": query,
+                        "format": "json",
+                        "categories": "general",
+                        "language": "en",
+                        "time_range": "month",
+                    },
                 )
                 if response.status_code == 429:
                     raise CompanyDiscoveryError("The free search service is temporarily rate limited. Try again later.")
@@ -144,6 +154,9 @@ def discover_company_sites(role_keywords: list[str], locations: list[str]) -> li
                         continue
                     if not isinstance(description, str):
                         description = ""
+                    # Never present search snippets (including AI-generated
+                    # summaries) as verified job details.
+                    description = ""
                     signals = f"{title} {url} {description}".casefold()
                     if not any(hint in signals for hint in CAREER_HINTS):
                         continue

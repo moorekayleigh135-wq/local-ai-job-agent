@@ -8,7 +8,7 @@ import re
 import socket
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from html import unescape
 from urllib.parse import urljoin, urlsplit
 from urllib.robotparser import RobotFileParser
@@ -63,6 +63,46 @@ def _parse_posted_at(value: object) -> datetime | None:
     if posted_at.tzinfo is None:
         posted_at = posted_at.replace(tzinfo=timezone.utc)
     return posted_at.astimezone(timezone.utc)
+
+
+def _parse_valid_through(value: object) -> datetime | None:
+    """Treat a date-only validThrough value as valid through that full day."""
+    if isinstance(value, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", value.strip()):
+        parsed = _parse_posted_at(value)
+        if parsed is not None:
+            return parsed.replace(hour=23, minute=59, second=59, microsecond=999999)
+    return _parse_posted_at(value)
+
+
+def _structured_job_postings(html: str) -> list[dict]:
+    """Read schema.org JobPosting records from a page without running scripts."""
+    soup = BeautifulSoup(html, "html.parser")
+    records: list[dict] = []
+
+    def walk(value: object):
+        pending = [value]
+        inspected = 0
+        while pending and inspected < 20_000:
+            current = pending.pop()
+            inspected += 1
+            if isinstance(current, dict):
+                kind = current.get("@type", [])
+                if isinstance(kind, str):
+                    kind = [kind]
+                if isinstance(kind, list) and any(str(item).rsplit("/", 1)[-1] == "JobPosting" for item in kind):
+                    yield current
+                pending.extend(current.values())
+            elif isinstance(current, list):
+                pending.extend(current)
+
+    for script in soup.find_all("script", type=re.compile(r"ld\+json", re.I)):
+        text = script.string or script.get_text()
+        try:
+            payload = json.loads(text)
+        except (json.JSONDecodeError, TypeError, RecursionError):
+            continue
+        records.extend(walk(payload))
+    return records
 
 
 def validate_public_url(url: str) -> str:
@@ -323,7 +363,9 @@ def _score_posting(text: str, preferences: dict) -> tuple[int, list[str]]:
     return round(100 * score / configured_weight), matched
 
 
-def scan_career_site(site_url: str, preferences: dict) -> tuple[list[ScannedPosting], int, list[str]]:
+def scan_career_site(
+    site_url: str, preferences: dict, freshness_hours: int = 720
+) -> tuple[list[ScannedPosting], int, list[str]]:
     """Fetch one career page and a small set of allowed job detail pages."""
     validate_public_url(site_url)
     headers = {
@@ -348,6 +390,7 @@ def scan_career_site(site_url: str, preferences: dict) -> tuple[list[ScannedPost
 
         postings: list[ScannedPosting] = []
         skipped = 0
+        unverified = 0
         errors: list[str] = []
         for candidate in candidates:
             if not robots.can_fetch(BOT_NAME, candidate.url):
@@ -361,19 +404,51 @@ def scan_career_site(site_url: str, preferences: dict) -> tuple[list[ScannedPost
                 if status != 200 or "html" not in content_type:
                     skipped += 1
                     continue
+                job_records = _structured_job_postings(detail_html)
+                verified = []
+                verified_at = datetime.now(timezone.utc)
+                cutoff = verified_at - timedelta(hours=freshness_hours)
+                for record in job_records:
+                    posted_at = _parse_posted_at(record.get("datePosted"))
+                    valid_through = _parse_valid_through(record.get("validThrough"))
+                    record_title = record.get("title") or record.get("name")
+                    if (
+                        posted_at is not None
+                        and cutoff <= posted_at <= datetime.now(timezone.utc)
+                        and (valid_through is None or valid_through >= verified_at)
+                        and isinstance(record_title, str)
+                        and record_title.strip()
+                    ):
+                        verified.append((record, posted_at))
+                if not verified:
+                    skipped += 1
+                    unverified += 1
+                    continue
+                record, posted_at = verified[0]
                 detail = _page_text(detail_html)
                 description = detail if len(detail) >= 40 else candidate.description
+                record_description = record.get("description")
+                if isinstance(record_description, str):
+                    record_description = " ".join(
+                        BeautifulSoup(record_description, "html.parser").stripped_strings
+                    )
+                    if len(record_description) > len(description):
+                        description = record_description[:12_000]
+                title = " ".join(str(record.get("title") or record.get("name") or candidate.title).split())
                 score, terms = _score_posting(
-                    f"{candidate.title} {candidate.description} {description}", preferences
+                    f"{title} {candidate.description} {description}", preferences
                 )
                 postings.append(
                     ScannedPosting(
-                        candidate.url, candidate.title, description, score, terms,
-                        candidate.posted_at,
+                        candidate.url, title, description, score, terms, posted_at,
                     )
                 )
             except ScanError as exc:
                 skipped += 1
                 if len(errors) < 3:
                     errors.append(str(exc))
+        if unverified and not postings:
+            errors.append(
+                f"Skipped {unverified} listing(s): the actual posting page did not verify a JobPosting record dated within the last {freshness_hours} hours."
+            )
         return postings, skipped, errors

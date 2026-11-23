@@ -440,7 +440,10 @@ def scan_company(company_id: int, db: DatabaseSession) -> ScanSummary:
         "min_match_score": preferences.min_match_score,
     }
     try:
-        postings, skipped_count, warnings = scan_career_site(site.url, preference_data)
+        postings, skipped_count, warnings = scan_career_site(
+            site.url, preference_data,
+            freshness_hours=settings.new_job_window_hours,
+        )
     except ScanError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -502,7 +505,8 @@ def scan_company(company_id: int, db: DatabaseSession) -> ScanSummary:
             match.scanned_at = now
 
         within_freshness_window = (
-            posting.posted_at is None or freshness_cutoff <= posting.posted_at <= now
+            posting.posted_at is not None
+            and freshness_cutoff <= posting.posted_at <= now
         )
         newly_qualifies = (
             previous_score is not None and previous_score < preferences.min_match_score
