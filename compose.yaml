@@ -43,6 +43,27 @@ services:
       retries: 5
       start_period: 30s
 
+  search:
+    image: searxng/searxng:latest
+    restart: unless-stopped
+    environment:
+      SEARXNG_BASE_URL: http://search:8080/
+      SEARXNG_BIND_ADDRESS: 0.0.0.0
+      SEARXNG_PORT: "8080"
+      SEARXNG_SECRET: ${SEARXNG_SECRET:?Set SEARXNG_SECRET in .env}
+      SEARXNG_LIMITER: "false"
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+      - searxng_cache:/var/cache/searxng
+    networks:
+      - agent_network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+
   api:
     build:
       context: ./backend
@@ -55,6 +76,7 @@ services:
       MYSQL_USER: ${MYSQL_USER:?Set MYSQL_USER in .env}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
       PROFILE_ENCRYPTION_KEY: ${PROFILE_ENCRYPTION_KEY:?Set PROFILE_ENCRYPTION_KEY in .env}
+      SEARXNG_URL: http://search:8080
       COMPANY_DISCOVERY_INTERVAL_HOURS: ${COMPANY_DISCOVERY_INTERVAL_HOURS:-24}
       OLLAMA_URL: http://ollama:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:8b}
@@ -64,6 +86,8 @@ services:
       db:
         condition: service_healthy
       ollama:
+        condition: service_healthy
+      search:
         condition: service_healthy
     ports:
       - "127.0.0.1:${API_PORT:-8000}:8000"
@@ -90,4 +114,5 @@ networks:
 volumes:
   mysql_data:
   ollama_data:
+  searxng_cache:
 

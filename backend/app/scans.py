@@ -42,7 +42,7 @@ DatabaseSession = Annotated[Session, Depends(get_db)]
 
 def _discovery_response(db: Session, message: str | None = None) -> CompanyDiscoveryRead:
     state = db.get(CompanyDiscoveryState, 1)
-    if state and state.last_error and state.last_error.startswith("Brave Search"):
+    if state and state.last_error and state.last_error.startswith(("Brave Search", "DuckDuckGo")):
         # Clear provider-specific failures retained from installations upgraded
         # from the previous paid search integration.
         state.last_error = None
@@ -223,7 +223,7 @@ def list_companies(db: DatabaseSession) -> list[CareerSite]:
 
 @router.get("/discovery", response_model=CompanyDiscoveryRead)
 def get_company_discovery(db: DatabaseSession) -> CompanyDiscoveryRead:
-    message = "Free web search uses your saved role and location terms. Resume data stays local."
+    message = "Free local search sends your saved role and location terms to SearXNG's configured search engines. Resume data stays local."
     return _discovery_response(db, message)
 
 

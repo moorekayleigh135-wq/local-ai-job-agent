@@ -1,0 +1,11 @@
+use_default_settings: true
+
+search:
+  # The API needs JSON results from this private, Compose-only instance.
+  formats:
+    - html
+    - json
+
+server:
+  limiter: false
+  image_proxy: false
