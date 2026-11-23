@@ -22,12 +22,40 @@ EXCLUDED_DOMAINS = {
     "wellfound.com",
     "shifts.com",
     "tealhq.com",
+    # Discovery suggests employer career sources, not third-party boards,
+    # recruiting agencies, salary pages, or scraped job-search destinations.
+    "indeed.com",
+    "linkedin.com",
+    "handshake.com",
+    "glassdoor.com",
+    "ziprecruiter.com",
+    "zippia.com",
+    "levels.fyi",
+    "roberthalf.com",
+    "randstadusa.com",
+    "zrgpartners.com",
 }
 CAREER_HINTS = (
     "career", "jobs", "job", "workday", "greenhouse", "lever", "ashby",
     "smartrecruiters", "workable", "icims", "employment", "talent",
 )
-CAREER_PATH_HINTS = {"careers", "career", "jobs", "job", "openings", "positions"}
+CAREER_PATH_HINTS = {"careers", "career", "jobs", "job", "openings", "positions", "search-jobs", "search_jobs"}
+NON_CAREER_PATHS = {
+    "about", "team", "people", "salary", "salaries", "reviews", "review",
+    "blog", "resources", "career-advice", "career-center", "who-we-are",
+}
+NOISE_TITLE_PATTERN = re.compile(
+    r"\b(meet (?:the )?team|our team|about us|salary|salaries|company reviews?|"
+    r"career advice|career resources|job search tips|jobs near you|"
+    r"hiring statistics)\b",
+    re.I,
+)
+ROLE_TOKEN_ALIASES = {
+    "analyst": "analytics",
+    "analysis": "analytics",
+    "engineer": "engineering",
+    "strategist": "strategy",
+}
 ROLE_STOP_WORDS = {"a", "an", "and", "for", "in", "of", "the", "to", "job", "jobs", "career", "careers"}
 SENIOR_TITLE_PATTERN = re.compile(
     r"\b(senior|sr\.?|staff|principal|lead|director|vp|vice president|chief|head of|manager)\b",
@@ -72,20 +100,58 @@ def _query_groups(
 
 
 def is_excluded_company_url(url: str) -> bool:
-    host = (urlsplit(url).hostname or "").casefold().rstrip(".")
-    return any(host == domain or host.endswith("." + domain) for domain in EXCLUDED_DOMAINS)
+    try:
+        parsed = urlsplit(url)
+        host = (parsed.hostname or "").casefold().rstrip(".")
+        segments = [segment.casefold() for segment in parsed.path.split("/") if segment]
+    except ValueError:
+        return True
+    if any(host == domain or host.endswith("." + domain) for domain in EXCLUDED_DOMAINS):
+        return True
+    if any(segment in NON_CAREER_PATHS for segment in segments):
+        return True
+    return not _is_career_destination(url)
+
+
+def _is_career_destination(url: str) -> bool:
+    """Keep employer career roots and ATS pages; reject generic company pages."""
+    parsed = urlsplit(url)
+    host = (parsed.hostname or "").casefold().rstrip(".")
+    segments = [segment.casefold() for segment in parsed.path.split("/") if segment]
+    if host.startswith(("careers.", "career.", "jobs.", "job.")):
+        return True
+    ats_domains = (
+        "greenhouse.io", "lever.co", "ashbyhq.com", "smartrecruiters.com",
+        "myworkdayjobs.com", "workday.com", "workable.com", "icims.com",
+        "jobvite.com", "successfactors.com",
+    )
+    if any(host == domain or host.endswith("." + domain) for domain in ats_domains):
+        return True
+    return any(segment in CAREER_PATH_HINTS for segment in segments)
 
 
 def _role_tokens(value: str) -> set[str]:
     return {
-        token for token in re.findall(r"[a-z0-9]+", value.casefold())
+        ROLE_TOKEN_ALIASES.get(token, token)
+        for token in re.findall(r"[a-z0-9]+", value.casefold())
         if token not in ROLE_STOP_WORDS and (len(token) >= 3 or token in {"it", "qa"})
     }
 
 
 def _role_relevant(text: str, role_keywords: list[str]) -> bool:
-    role_tokens = set().union(*(_role_tokens(role) for role in role_keywords))
-    return bool(role_tokens & _role_tokens(text))
+    """Require a whole target phrase (or the complete multiword role) in the result."""
+    result_tokens = _role_tokens(text)
+    for role in role_keywords:
+        role_tokens = _role_tokens(role)
+        if not role_tokens:
+            continue
+        if len(role_tokens) == 1 and role_tokens <= result_tokens:
+            return True
+        # A single shared word (for example, "business" in a team bio) is
+        # not enough to make a generic page relevant to a multiword target.
+        if len(role_tokens) > 1 and role_tokens <= result_tokens:
+            return True
+    return False
 
 
 def _is_too_senior(title: str, experience_level: str | None) -> bool:
@@ -120,6 +186,9 @@ def _is_candidate_url(url: object) -> bool:
 
 def _company_name(title: str, url: str) -> str:
     name = re.split(r"\s+[|·–—-]\s+", title.strip(), maxsplit=1)[0]
+    at_match = re.match(r"^.{3,100}?\s+at\s+(.+)$", name, flags=re.I)
+    if at_match:
+        name = at_match.group(1)
     name = re.sub(r"\b(careers?|jobs?|open positions|job openings)\b", "", name, flags=re.I)
     name = " ".join(name.split()).strip(" -|·–—")
     if name:
@@ -139,6 +208,8 @@ def _career_page_url(url: str) -> str:
         if host == "ibm.com" or host == "www.ibm.com":
             return "https://www.ibm.com/careers/search"
         return "https://careers.ibm.com/en_US/careers"
+    if host == "jobs.citi.com":
+        return "https://jobs.citi.com/search-jobs"
     if any(matches_domain(domain) for domain in (
         "greenhouse.io", "lever.co", "ashbyhq.com", "smartrecruiters.com"
     )):
@@ -198,6 +269,12 @@ def discover_company_sites(
                         continue
                     if not isinstance(description, str):
                         description = ""
+                    if NOISE_TITLE_PATTERN.search(title):
+                        continue
+                    if is_excluded_company_url(url):
+                        continue
+                    if not _is_career_destination(url):
+                        continue
                     signals = f"{title} {url} {description}".casefold()
                     if _is_too_senior(title, experience_level):
                         continue

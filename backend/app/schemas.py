@@ -56,6 +56,7 @@ class JobRead(BaseModel):
     skills: list[str]
     qualifications: list[str]
     created_at: datetime
+    match_score: int | None = None
 
 
 class CareerSiteCreate(BaseModel):

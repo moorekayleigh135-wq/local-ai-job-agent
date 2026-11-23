@@ -23,6 +23,7 @@ USER_AGENT = "JobHarborJobFinder/0.1 (user-directed career-page scanner)"
 MAX_PAGE_BYTES = 2_000_000
 MAX_ROBOTS_BYTES = 512_000
 MAX_JOB_PAGES = 10
+MAX_LISTING_PAGES = 3
 MAX_CRAWL_DELAY = 30
 DEFAULT_CRAWL_DELAY = 1
 JOB_PATH_HINTS = (
@@ -66,7 +67,15 @@ def _parse_posted_at(value: object) -> datetime | None:
     try:
         posted_at = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
     except ValueError:
-        return None
+        posted_at = None
+        for date_format in ("%b. %d, %Y", "%b %d, %Y", "%B %d, %Y", "%m/%d/%Y"):
+            try:
+                posted_at = datetime.strptime(value.strip(), date_format).replace(tzinfo=timezone.utc)
+                break
+            except ValueError:
+                continue
+        if posted_at is None:
+            return None
     if posted_at.tzinfo is None:
         posted_at = posted_at.replace(tzinfo=timezone.utc)
     return posted_at.astimezone(timezone.utc)
@@ -178,6 +187,7 @@ def _structured_job_postings(html: str) -> list[dict]:
             heading = soup.find("h1")
             title_text = " ".join(heading.stripped_strings) if heading else ""
         date_value = None
+        close_date_value = None
         for attrs in (
             {"itemprop": "datePosted"},
             {"property": "article:published_time"},
@@ -191,10 +201,27 @@ def _structured_job_postings(html: str) -> list[dict]:
             time_node = soup.find("time", attrs={"datetime": True})
             if time_node:
                 date_value = time_node.get("datetime")
+        visible_text = " ".join(soup.stripped_strings)
+        if not date_value:
+            posted_match = re.search(
+                r"\b(?:posted|date posted)\s*:\s*([A-Za-z]{3,9}\.?\s+\d{1,2},\s+\d{4})",
+                visible_text,
+                re.I,
+            )
+            if posted_match:
+                date_value = posted_match.group(1)
+        close_match = re.search(
+            r"\b(?:anticipated )?(?:posting )?close date\s*:\s*([A-Za-z]{3,9}\.?\s+\d{1,2},\s+\d{4})",
+            visible_text,
+            re.I,
+        )
+        if close_match:
+            close_date_value = close_match.group(1)
         if title_text and date_value:
             records.append({
                 "@type": "JobPosting", "title": title_text,
-                "datePosted": date_value, "description": _page_text(html),
+                "datePosted": date_value, "validThrough": close_date_value,
+                "description": _page_text(html),
             })
     return records
 
@@ -215,6 +242,10 @@ def _external_job_id(url: str, record: dict | None = None) -> str | None:
             identifier = identifier.get("value") or identifier.get("name")
         if isinstance(identifier, (str, int)):
             value = str(identifier)
+    if value is None and host == "jobs.citi.com":
+        citi_path_id = re.search(r"/job/.*/\d+/([0-9]{5,})/?$", urlsplit(url).path, re.I)
+        if citi_path_id:
+            value = citi_path_id.group(1)
     if value is None:
         return None
     value = re.sub(r"[^A-Za-z0-9._-]", "", str(value))[:100]
@@ -226,6 +257,10 @@ def _is_direct_job_url(url: str) -> bool:
     return (
         _external_job_id(url) is not None
         or bool(re.search(r"/jobdetail(?:/|$)", parsed.path, re.I))
+        or bool(
+            (urlsplit(url).hostname or "").casefold() == "jobs.citi.com"
+            and re.search(r"/job/.*/\d+/\d+/?$", parsed.path, re.I)
+        )
     )
 
 
@@ -267,7 +302,7 @@ def _job_experience(record: dict, title: str, description: str) -> tuple[str | N
         ("Internship", r"\b(intern(ship)?|student|co[- ]op)\b"),
         ("Executive", r"\b(director|vice president|\bvp\b|executive|chief)\b"),
         ("Senior", r"\b(senior|staff|principal|lead)\b"),
-        ("Entry level", r"\b(entry[- ]level|junior|early career|graduate|associate)\b"),
+        ("Entry level", r"\b(entry[- ]level|junior|early career|graduate|associate|undergraduate|full[- ]time analyst|analyst program)\b"),
         ("Professional", r"\b(mid[- ]level|professional)\b"),
     ):
         if re.search(pattern, level_evidence):
@@ -635,7 +670,35 @@ def _listing_candidates(html: str, page_url: str) -> list[Candidate]:
         ),
         reverse=True,
     )
-    return candidates[:MAX_JOB_PAGES]
+    return candidates
+
+
+def _listing_page_urls(html: str, page_url: str) -> list[str]:
+    """Find a small, same-site set of explicit next-page links."""
+    soup = BeautifulSoup(html, "html.parser")
+    urls: list[str] = []
+    for anchor in soup.find_all("a", href=True):
+        label = " ".join((
+            " ".join(anchor.stripped_strings),
+            str(anchor.get("aria-label", "")),
+            " ".join(anchor.get("rel", [])),
+        )).casefold()
+        if not re.search(r"\bnext\b|rel\s+next|next page", label):
+            continue
+        try:
+            candidate_url = urljoin(page_url, unescape(str(anchor["href"]).strip()))
+            parsed = urlsplit(candidate_url)
+        except (KeyError, ValueError):
+            continue
+        if parsed.scheme not in {"http", "https"} or not _same_job_site(page_url, candidate_url):
+            continue
+        if candidate_url.split("#", 1)[0] == page_url.split("#", 1)[0]:
+            continue
+        if candidate_url not in urls:
+            urls.append(candidate_url)
+        if len(urls) >= MAX_LISTING_PAGES - 1:
+            break
+    return urls
 
 
 ROLE_TOKEN_ALIASES = {
@@ -667,7 +730,41 @@ def _role_matches_title(role: str, title: str) -> bool:
     shared = set(role_tokens) & set(title_tokens)
     if len(role_tokens) == 1:
         return bool(shared)
-    return len(shared) >= 2 and len(shared) / len(set(role_tokens)) >= 0.5
+    return len(shared) >= 2 and len(shared) / len(set(role_tokens)) >= 0.67
+
+
+def _prioritize_candidates(candidates: list[Candidate], preferences: dict) -> list[Candidate]:
+    """Choose role-title matches before spending the bounded detail-page budget."""
+    roles = [str(role).strip() for role in preferences.get("role_keywords", []) if str(role).strip()]
+    if not roles:
+        return candidates[:MAX_JOB_PAGES]
+    role_matches = {
+        candidate.url: max(
+            (len(set(_role_tokens(role))) for role in roles
+             if _role_matches_title(role, candidate.title)),
+            default=0,
+        )
+        for candidate in candidates
+    }
+    relevant = [candidate for candidate in candidates if role_matches[candidate.url] > 0]
+    if relevant:
+        candidates = relevant
+
+    target_level = preferences.get("effective_experience_level") or preferences.get("experience_level")
+
+    def priority(candidate: Candidate) -> tuple:
+        level, required_years = _job_experience({}, candidate.title, candidate.description)
+        experience = _experience_score(
+            preferences.get("candidate_years_experience"), required_years, level, target_level
+        )
+        posted = candidate.posted_at.timestamp() if candidate.posted_at else 0
+        return (
+            role_matches[candidate.url],
+            experience if experience is not None else 50,
+            posted,
+        )
+
+    return sorted(candidates, key=priority, reverse=True)[:MAX_JOB_PAGES]
 
 
 def _score_posting(
@@ -681,7 +778,7 @@ def _score_posting(
 ) -> tuple[int, list[str]]:
     searchable = " ".join(text.casefold().split())
     roles = [str(term).strip() for term in preferences.get("role_keywords", []) if str(term).strip()]
-    matched_roles = [role for role in roles if _role_matches_title(role, f"{title} {role_context}")]
+    matched_roles = [role for role in roles if _role_matches_title(role, title)]
     if roles and not matched_roles:
         return 0, []
     groups = [
@@ -744,7 +841,7 @@ def _score_posting(
 
 
 def scan_career_site(
-    site_url: str, preferences: dict, freshness_hours: int = 720
+    site_url: str, preferences: dict, posting_max_age_days: int = 30
 ) -> tuple[list[ScannedPosting], int, list[str]]:
     """Fetch one career page and a small set of allowed job detail pages."""
     validate_public_url(site_url)
@@ -771,17 +868,69 @@ def scan_career_site(
                 raise ScanError("The monitored careers page redirected. Add the destination careers URL directly.")
             if status != 200 or "html" not in content_type:
                 raise ScanError("The careers page did not return a readable HTML page.")
-            candidates = _listing_candidates(listing, site_url)
             listing_challenge = _is_verification_challenge(listing)
             listing_render_failed = False
-            if not candidates and not listing_challenge:
+            listing_pages = [(site_url, listing)]
+            candidates = _listing_candidates(listing, site_url)
+            roles = preferences.get("role_keywords", [])
+            has_relevant_title = any(
+                _role_matches_title(role, candidate.title)
+                for role in roles for candidate in candidates
+            )
+            if not has_relevant_title and not listing_challenge:
                 rendered_listing = _render_with_browser(site_url, site_url)
                 if rendered_listing is None:
                     listing_render_failed = True
                 elif _is_verification_challenge(rendered_listing):
                     listing_challenge = True
                 else:
+                    listing_pages = [(site_url, rendered_listing)]
                     candidates = _listing_candidates(rendered_listing, site_url)
+            # Follow explicit pagination links breadth-first. Some career sites
+            # expose only the next page, so gathering links from page one alone
+            # silently misses later results (including Citi's TalentBrew pages).
+            pending_pages = [
+                next_url
+                for page_url, page_html in listing_pages
+                for next_url in _listing_page_urls(page_html, page_url)
+                if next_url != site_url
+            ]
+            visited_pages = {site_url}
+            while pending_pages and len(visited_pages) < MAX_LISTING_PAGES:
+                page_url = pending_pages.pop(0)
+                if page_url in visited_pages:
+                    continue
+                visited_pages.add(page_url)
+                try:
+                    validate_public_url(page_url)
+                    page_robots, page_delay = _robots(client, page_url)
+                    if not page_robots.can_fetch(BOT_NAME, page_url):
+                        continue
+                    time.sleep(page_delay)
+                    page_status, page_type, page_html = _read_response(client, page_url, MAX_PAGE_BYTES)
+                    if page_status != 200 or "html" not in page_type:
+                        continue
+                    if _is_verification_challenge(page_html):
+                        listing_challenge = True
+                        continue
+                    page_candidates = _listing_candidates(page_html, page_url)
+                    page_has_relevant_title = any(
+                        _role_matches_title(role, candidate.title)
+                        for role in roles for candidate in page_candidates
+                    )
+                    if not page_has_relevant_title:
+                        rendered_page = _render_with_browser(page_url, site_url)
+                        if rendered_page is not None and not _is_verification_challenge(rendered_page):
+                            page_candidates = _listing_candidates(rendered_page, page_url)
+                    candidates.extend(page_candidates)
+                    pending_pages.extend(
+                        next_url for next_url in _listing_page_urls(page_html, page_url)
+                        if next_url not in visited_pages and next_url not in pending_pages
+                    )
+                except ScanError:
+                    continue
+            unique_candidates = {candidate.url: candidate for candidate in candidates}
+            candidates = _prioritize_candidates(list(unique_candidates.values()), preferences)
         if not candidates:
             warnings = ["No same-site job links were found. Try the company's direct careers or ATS page."]
             if not _is_direct_job_url(site_url) and listing_challenge:
@@ -846,7 +995,7 @@ def scan_career_site(
                         job_records = _structured_job_postings(detail_html)
                 verified = []
                 verified_at = datetime.now(timezone.utc)
-                cutoff = verified_at - timedelta(hours=freshness_hours)
+                cutoff = verified_at - timedelta(days=posting_max_age_days)
                 requested_id = _external_job_id(candidate.url)
                 for record in job_records:
                     record_identifier = record.get("identifier")
@@ -917,7 +1066,7 @@ def scan_career_site(
                     errors.append(str(exc))
         if unverified:
             errors.append(
-                f"Skipped {unverified} listing(s): the actual posting page did not verify a JobPosting record dated within the last {freshness_hours} hours."
+                f"Skipped {unverified} listing(s): the actual posting page did not verify a JobPosting record dated within the last {posting_max_age_days} days."
             )
         fits = score_postings_locally(postings, preferences)
         if fits is None:
@@ -942,6 +1091,16 @@ def scan_career_site(
                     f"Experience fit {experience_fit}%",
                 ]
         for posting in postings:
+            # The model may use skills and description context to over-credit
+            # a related but different job family. A target-title mismatch is
+            # a hard fail and cannot be rescued by the AI score.
+            if preferences.get("role_keywords") and not any(
+                _role_matches_title(role, posting.title)
+                for role in preferences["role_keywords"]
+            ):
+                posting.score = 0
+                posting.matched_terms = []
+                continue
             if posting.experience_compatibility is not None:
                 posting.score = min(posting.score, posting.experience_compatibility)
         if not_found:

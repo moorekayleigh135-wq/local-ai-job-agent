@@ -4,12 +4,12 @@ from typing import Annotated
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import case, or_, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.job_extractor import extract_job_details
-from app.models import Job
+from app.models import Job, JobScanMatch, SearchPreferences
 from app.schemas import JobCreate, JobRead
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -46,16 +46,35 @@ def list_jobs(
     db: DatabaseSession,
     limit: int = Query(default=50, ge=1, le=50),
     offset: int = Query(default=0, ge=0),
-) -> list[Job]:
-    """List saved jobs, newest first."""
+) -> list[JobRead]:
+    """List manual saves and scanner jobs that meet the user's match threshold."""
 
+    preferences = db.get(SearchPreferences, 1)
+    minimum_match = preferences.min_match_score if preferences else 40
     statement = (
-        select(Job)
-        .order_by(Job.created_at.desc(), Job.id.desc())
+        select(Job, JobScanMatch.match_score)
+        .outerjoin(JobScanMatch, JobScanMatch.job_id == Job.id)
+        .where(
+            or_(
+                JobScanMatch.id.is_(None),
+                JobScanMatch.match_score >= minimum_match,
+            )
+        )
+        .order_by(
+            case((JobScanMatch.match_score.is_(None), 1), else_=0),
+            JobScanMatch.match_score.desc(),
+            Job.created_at.desc(),
+            Job.id.desc(),
+        )
         .offset(offset)
         .limit(limit)
     )
-    return list(db.scalars(statement).all())
+    return [
+        JobRead.model_validate(job, from_attributes=True).model_copy(
+            update={"match_score": match_score}
+        )
+        for job, match_score in db.execute(statement).all()
+    ]
 
 
 @router.get("/{job_id}", response_model=JobRead)

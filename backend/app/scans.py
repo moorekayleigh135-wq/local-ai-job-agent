@@ -483,21 +483,8 @@ def scan_company(company_id: int, db: DatabaseSession) -> ScanSummary:
     if candidate_profile_row and isinstance(candidate_profile_row.profile_data, dict):
         profile = candidate_profile_row.profile_data.get("profile", candidate_profile_row.profile_data)
     if isinstance(profile, dict):
-        profile_roles = [
-            value.strip() for value in profile.get("role_keywords", [])
-            if isinstance(value, str) and value.strip()
-        ]
-        experience_titles = [
-            item.get("title", "").strip()
-            for item in profile.get("experience", [])
-            if isinstance(item, dict) and isinstance(item.get("title"), str) and item["title"].strip()
-        ]
-        headline = profile.get("headline")
-        if isinstance(headline, str) and headline.strip():
-            experience_titles.insert(0, headline.strip())
-        preference_data["role_keywords"] = list(dict.fromkeys(
-            [*preferences.role_keywords, *profile_roles, *experience_titles[:5]]
-        ))
+        # Explicit search targets define role relevance. Resume titles are
+        # candidate evidence for scoring, not additional roles to search for.
         profile_skills = [
             value.strip() for value in profile.get("skills", [])
             if isinstance(value, str) and value.strip()
@@ -512,7 +499,7 @@ def scan_company(company_id: int, db: DatabaseSession) -> ScanSummary:
     )
     try:
         postings, skipped_count, warnings = scan_career_site(
-            site.url, preference_data, settings.new_job_window_hours,
+            site.url, preference_data, settings.job_posting_max_age_days,
         )
     except ScanError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

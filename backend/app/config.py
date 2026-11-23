@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     scan_interval_minutes: int = Field(default=60, ge=15, le=1440)
     company_discovery_interval_hours: int = Field(default=24, ge=6, le=168)
     new_job_window_hours: int = Field(default=720, ge=1, le=720)
+    job_posting_max_age_days: int = Field(default=30, ge=1, le=90)
     vapid_public_key: str = ""
     vapid_private_key: str = ""
     vapid_subject: str = "mailto:jobharbor@localhost"
