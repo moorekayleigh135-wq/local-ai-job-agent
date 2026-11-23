@@ -58,7 +58,7 @@
   <div class="toast" id="toast" role="status"></div>
   <script>
     const $=s=>document.querySelector(s);let jobs=[],activeFilter='all';
-    $('#today').textContent=new Intl.DateTimeFormat(undefined,{weekday:'short',month:'long',day:'numeric'}).format(new Date());
+    const todayLabel=$('#today');if(todayLabel)todayLabel.textContent=new Intl.DateTimeFormat(undefined,{weekday:'short',month:'long',day:'numeric'}).format(new Date());
     const escapeHtml=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     const shortDate=value=>{if(!value)return '';const d=new Date(value);return Number.isNaN(d.getTime())?'':new Intl.DateTimeFormat(undefined,{month:'short',day:'numeric'}).format(d)};
     function toast(message){const t=$('#toast');t.textContent=message;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),3200)}
