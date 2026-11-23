@@ -10,11 +10,13 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from html import unescape
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import parse_qs, urljoin, urlsplit
 from urllib.robotparser import RobotFileParser
 
 import httpx
 from bs4 import BeautifulSoup
+
+from app.job_matcher import score_postings_locally
 
 BOT_NAME = "JobHarborJobFinder"
 USER_AGENT = "JobHarborJobFinder/0.1 (user-directed career-page scanner)"
@@ -48,6 +50,10 @@ class ScannedPosting:
     score: int
     matched_terms: list[str]
     posted_at: datetime | None = None
+    external_id: str | None = None
+    job_level: str | None = None
+    location: str | None = None
+    employment_type: str | None = None
 
 
 def _parse_posted_at(value: object) -> datetime | None:
@@ -75,9 +81,36 @@ def _parse_valid_through(value: object) -> datetime | None:
 
 
 def _structured_job_postings(html: str) -> list[dict]:
-    """Read schema.org JobPosting records from a page without running scripts."""
+    """Read structured job records from embedded JSON without running scripts."""
     soup = BeautifulSoup(html, "html.parser")
     records: list[dict] = []
+    payloads: list[object] = []
+
+    for script in soup.find_all("script"):
+        script_type = str(script.get("type", "")).casefold()
+        script_id = str(script.get("id", "")).casefold()
+        text = (script.string or script.get_text()).strip()
+        if not text:
+            continue
+        if "json" in script_type or script_id in {
+            "__next_data__", "__nuxt_data__", "__initial_state__", "__apollo_state__"
+        }:
+            try:
+                payloads.append(json.loads(text))
+            except (json.JSONDecodeError, TypeError, RecursionError):
+                pass
+        elif re.match(
+            r"\s*(?:window\.)?__(?:INITIAL_STATE|NEXT_DATA|APOLLO_STATE|PRELOADED_STATE)__\s*=",
+            text,
+            re.I,
+        ):
+            json_start = text.find("{")
+            if json_start >= 0:
+                try:
+                    payload, _ = json.JSONDecoder().raw_decode(text[json_start:])
+                    payloads.append(payload)
+                except (json.JSONDecodeError, RecursionError):
+                    pass
 
     def walk(value: object):
         pending = [value]
@@ -86,23 +119,232 @@ def _structured_job_postings(html: str) -> list[dict]:
             current = pending.pop()
             inspected += 1
             if isinstance(current, dict):
-                kind = current.get("@type", [])
-                if isinstance(kind, str):
-                    kind = [kind]
-                if isinstance(kind, list) and any(str(item).rsplit("/", 1)[-1] == "JobPosting" for item in kind):
-                    yield current
+                yield current
                 pending.extend(current.values())
             elif isinstance(current, list):
                 pending.extend(current)
 
-    for script in soup.find_all("script", type=re.compile(r"ld\+json", re.I)):
-        text = script.string or script.get_text()
-        try:
-            payload = json.loads(text)
-        except (json.JSONDecodeError, TypeError, RecursionError):
-            continue
-        records.extend(walk(payload))
+    for payload in payloads:
+        for item in walk(payload):
+            kind = item.get("@type", [])
+            if isinstance(kind, str):
+                kind = [kind]
+            if isinstance(kind, list) and any(
+                str(value).rsplit("/", 1)[-1] == "JobPosting" for value in kind
+            ):
+                records.append(item)
+                continue
+            title = (
+                item.get("title") or item.get("jobTitle")
+                or item.get("positionTitle") or item.get("jobPostingTitle")
+            )
+            posted = (
+                item.get("datePosted") or item.get("postingDate")
+                or item.get("postedDate") or item.get("datePublished")
+                or item.get("postingDateTime")
+            )
+            description = (
+                item.get("description") or item.get("jobDescription")
+                or item.get("body") or item.get("jobPostingDescription")
+                or item.get("jobDescriptionText")
+            )
+            identifier = (
+                item.get("jobId") or item.get("jobID") or item.get("requisitionId")
+                or item.get("requisitionID") or item.get("reqId") or item.get("id")
+            )
+            title = _flatten_text(title).strip()
+            posted = _flatten_text(posted).strip()
+            description = _flatten_text(description).strip()
+            if title and posted and description:
+                records.append({
+                    "@type": "JobPosting", "title": title, "datePosted": posted,
+                    "description": description, "identifier": identifier,
+                    "validThrough": item.get("validThrough") or item.get("expirationDate"),
+                    "jobLocation": item.get("jobLocation") or item.get("location"),
+                    "employmentType": item.get("employmentType") or item.get("employment_type"),
+                    "experienceRequirements": (
+                        item.get("experienceRequirements") or item.get("experienceLevel")
+                        or item.get("careerLevel") or item.get("jobLevel")
+                    ),
+                })
+
+    if not records:
+        # A few employer pages publish their job data as page metadata rather
+        # than JSON-LD. The caller still requires a direct posting URL and date.
+        title = soup.find("meta", attrs={"property": "og:title"})
+        title_text = title.get("content", "") if title else ""
+        if not title_text:
+            heading = soup.find("h1")
+            title_text = " ".join(heading.stripped_strings) if heading else ""
+        date_value = None
+        for attrs in (
+            {"itemprop": "datePosted"},
+            {"property": "article:published_time"},
+            {"name": "datePosted"},
+        ):
+            date_node = soup.find("meta", attrs=attrs)
+            if date_node and date_node.get("content"):
+                date_value = date_node["content"]
+                break
+        if not date_value:
+            time_node = soup.find("time", attrs={"datetime": True})
+            if time_node:
+                date_value = time_node.get("datetime")
+        if title_text and date_value:
+            records.append({
+                "@type": "JobPosting", "title": title_text,
+                "datePosted": date_value, "description": _page_text(html),
+            })
     return records
+
+
+def _external_job_id(url: str, record: dict | None = None) -> str | None:
+    """Return a source-scoped ID such as careers.ibm.com:129654."""
+    host = (urlsplit(url).hostname or "").casefold()
+    if host == "ibm.com" or host.endswith(".ibm.com"):
+        host = "ibm.com"
+    query = parse_qs(urlsplit(url).query)
+    value = next((
+        query[key][0] for key in query
+        if key.casefold() in {"jobid", "job_id", "requisitionid", "reqid"} and query[key]
+    ), None)
+    if value is None and record is not None:
+        identifier = record.get("identifier") or record.get("jobId") or record.get("requisitionId")
+        if isinstance(identifier, dict):
+            identifier = identifier.get("value") or identifier.get("name")
+        if isinstance(identifier, (str, int)):
+            value = str(identifier)
+    if value is None:
+        return None
+    value = re.sub(r"[^A-Za-z0-9._-]", "", str(value))[:100]
+    return f"{host}:{value}" if value else None
+
+
+def _is_direct_job_url(url: str) -> bool:
+    parsed = urlsplit(url)
+    return (
+        _external_job_id(url) is not None
+        or bool(re.search(r"/jobdetail(?:/|$)", parsed.path, re.I))
+    )
+
+
+def _flatten_text(value: object) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, list):
+        return " ".join(_flatten_text(item) for item in value)
+    if isinstance(value, dict):
+        return " ".join(_flatten_text(item) for item in value.values())
+    return ""
+
+
+def _job_experience(record: dict, title: str, description: str) -> tuple[str | None, float | None]:
+    raw_level = next((
+        record.get(key) for key in (
+            "experienceLevel", "careerLevel", "jobLevel", "seniority",
+            "experienceRequirements", "occupationalExperienceRequirements",
+        ) if record.get(key)
+    ), None)
+    level_evidence = " ".join((_flatten_text(raw_level), title)).casefold()
+    explicit_page_level = re.search(
+        r"experience\s+level\s*[:\-–]?\s*(internship|entry[- ]level|professional|senior|executive)",
+        description[:6000],
+        re.I,
+    )
+    if explicit_page_level:
+        level_evidence += " " + explicit_page_level.group(1).casefold()
+    for value in (record.get("experienceRequirements"), record.get("occupationalExperienceRequirements")):
+        months = _months_of_experience(value)
+        if months is not None:
+            break
+    else:
+        months = None
+    level = None
+    for label, pattern in (
+        ("Internship", r"\b(intern(ship)?|student|co[- ]op)\b"),
+        ("Executive", r"\b(director|vice president|\bvp\b|executive|chief)\b"),
+        ("Senior", r"\b(senior|staff|principal|lead)\b"),
+        ("Entry level", r"\b(entry[- ]level|junior|early career|graduate|associate)\b"),
+        ("Professional", r"\b(mid[- ]level|professional)\b"),
+    ):
+        if re.search(pattern, level_evidence):
+            level = label
+            break
+    required = re.search(
+        r"\b(\d{1,2})(?:\s*(?:-|–|to)\s*\d{1,2})?\s*\+?\s*(?:years?|yrs?)"
+        r"(?:['’]s)?\s*(?:of\s+)?(?:relevant\s+)?experience",
+        " ".join((_flatten_text(raw_level), description[:6000])).casefold(),
+    )
+    required_years = None
+    if months is not None:
+        required_years = months / 12
+    if required:
+        value = required.group(1)
+        if value and required_years is None:
+            required_years = float(value)
+    if level is None and required_years is not None:
+        level = "Entry level" if required_years < 2 else "Professional" if required_years < 6 else "Senior"
+    return level, required_years
+
+
+def _job_location(record: dict) -> str | None:
+    value = record.get("jobLocation") or record.get("location")
+    text = " ".join(_flatten_text(value).split())
+    return text[:255] or None
+
+
+def _months_of_experience(value: object) -> float | None:
+    pending = [value]
+    while pending:
+        current = pending.pop()
+        if isinstance(current, dict):
+            for key, item in current.items():
+                if str(key).casefold() == "monthsofexperience":
+                    try:
+                        return max(0.0, float(item))
+                    except (TypeError, ValueError):
+                        continue
+                pending.append(item)
+        elif isinstance(current, list):
+            pending.extend(current)
+    return None
+
+
+def _experience_score(
+    candidate_years: object,
+    required_years: float | None,
+    job_level: str | None,
+    target_level: str | None = None,
+) -> int | None:
+    level_labels = {
+        "internship": "Internship",
+        "entry_level": "Entry level",
+        "professional": "Professional",
+        "senior": "Senior",
+        "executive": "Executive",
+    }
+    if target_level in level_labels:
+        target = level_labels[target_level]
+        levels = {"Internship": 0, "Entry level": 1, "Professional": 2, "Senior": 3, "Executive": 4}
+        if job_level not in levels:
+            return None
+        return max(30, 100 - abs(levels[target] - levels[job_level]) * 25)
+    if not isinstance(candidate_years, (int, float)) or isinstance(candidate_years, bool):
+        return None
+    years = max(0.0, float(candidate_years))
+    if required_years is not None:
+        if years >= required_years:
+            return 100
+        gap = required_years - years
+        return max(0, round(100 - gap * 20))
+    candidate_level = "Entry level" if years < 2 else "Professional" if years < 6 else "Senior"
+    levels = {"Internship": 0, "Entry level": 1, "Professional": 2, "Senior": 3, "Executive": 4}
+    if job_level not in levels:
+        return None
+    gap = abs(levels[candidate_level] - levels[job_level])
+    return max(30, 100 - gap * 25)
 
 
 def validate_public_url(url: str) -> str:
@@ -146,6 +388,24 @@ def _same_origin(left: str, right: str) -> bool:
         and (a.port or (443 if a.scheme == "https" else 80))
         == (b.port or (443 if b.scheme == "https" else 80))
     )
+
+
+def _same_job_site(left: str, right: str) -> bool:
+    """Allow IBM's official careers host to link to IBM's main careers host."""
+    if _same_origin(left, right):
+        return True
+    a, b = urlsplit(left), urlsplit(right)
+    if a.scheme.lower() != b.scheme.lower():
+        return False
+    return all(
+        host == "ibm.com" or host.endswith(".ibm.com")
+        for host in ((a.hostname or "").casefold(), (b.hostname or "").casefold())
+    )
+
+
+def _origin(url: str) -> str:
+    parsed = urlsplit(url)
+    return f"{parsed.scheme.casefold()}://{(parsed.hostname or '').casefold()}:{parsed.port or (443 if parsed.scheme == 'https' else 80)}"
 
 
 def _read_response(client: httpx.Client, url: str, byte_limit: int) -> tuple[int, str, str]:
@@ -206,7 +466,7 @@ def _listing_candidates(html: str, page_url: str) -> list[Candidate]:
         try:
             absolute_url = urljoin(page_url, raw_href)
             parsed = urlsplit(absolute_url)
-            same_origin = _same_origin(page_url, absolute_url)
+            same_origin = _same_job_site(page_url, absolute_url)
         except ValueError:
             continue
         if parsed.scheme not in {"http", "https"} or not same_origin:
@@ -296,7 +556,7 @@ def _listing_candidates(html: str, page_url: str) -> list[Candidate]:
             try:
                 absolute_url = urljoin(page_url, raw_url)
                 parsed = urlsplit(absolute_url)
-                if parsed.scheme not in {"http", "https"} or not _same_origin(page_url, absolute_url):
+                if parsed.scheme not in {"http", "https"} or not _same_job_site(page_url, absolute_url):
                     continue
             except ValueError:
                 continue
@@ -364,18 +624,32 @@ def _role_matches_title(role: str, title: str) -> bool:
     return len(shared) >= 2 and len(shared) / len(set(role_tokens)) >= 0.5
 
 
-def _score_posting(title: str, text: str, preferences: dict) -> tuple[int, list[str]]:
+def _score_posting(
+    title: str,
+    text: str,
+    preferences: dict,
+    *,
+    job_level: str | None = None,
+    required_years: float | None = None,
+    role_context: str = "",
+) -> tuple[int, list[str]]:
     searchable = " ".join(text.casefold().split())
     roles = [str(term).strip() for term in preferences.get("role_keywords", []) if str(term).strip()]
-    matched_roles = [role for role in roles if _role_matches_title(role, title)]
+    matched_roles = [role for role in roles if _role_matches_title(role, f"{title} {role_context}")]
     if roles and not matched_roles:
         return 0, []
     groups = [
-        (roles, 0.55),
-        (preferences.get("locations", []), 0.15),
-        (preferences.get("skills", []), 0.20),
-        (preferences.get("work_arrangements", []), 0.10),
+        (roles, 0.45),
+        (preferences.get("locations", []), 0.10),
+        (preferences.get("skills", []), 0.30),
+        (preferences.get("work_arrangements", []), 0.05),
     ]
+    experience_score = _experience_score(
+        preferences.get("candidate_years_experience"), required_years, job_level,
+        preferences.get("experience_level"),
+    )
+    if experience_score is not None:
+        groups.append((["experience"], 0.10))
     configured_weight = sum(weight for terms, weight in groups if terms)
     if configured_weight == 0:
         raise ScanError("Add at least one role, location, skill, or work-style preference before scanning.")
@@ -391,6 +665,14 @@ def _score_posting(title: str, text: str, preferences: dict) -> tuple[int, list[
             score += weight
             matched.extend(matched_roles)
             continue
+        if group_index == 4:
+            score += weight * experience_score / 100
+            matched.append(
+                f"experience level: {job_level or 'not listed'}"
+                if preferences.get("experience_level") not in {None, "any"}
+                else f"experience: {job_level or f'{required_years:g}+ years'}"
+            )
+            continue
         hits = []
         for term in cleaned:
             variants = {
@@ -400,7 +682,16 @@ def _score_posting(title: str, text: str, preferences: dict) -> tuple[int, list[
             }.get(term, (term,))
             if any(variant in searchable for variant in variants):
                 hits.append(term)
-        score += weight * len(hits) / len(cleaned)
+        if group_index in {1, 3}:
+            coverage = 1.0 if hits else 0.0
+        elif group_index == 2:
+            # Resume skills are alternatives, not a checklist every posting
+            # must satisfy. Cap the denominator so a long resume skill list
+            # does not suppress otherwise strong matches.
+            coverage = min(1.0, len(hits) / min(5, len(cleaned)))
+        else:
+            coverage = len(hits) / len(cleaned)
+        score += weight * coverage
         matched.extend(hits)
     return round(100 * score / configured_weight), matched
 
@@ -422,36 +713,75 @@ def scan_career_site(
         robots, delay = _robots(client, site_url)
         if not robots.can_fetch(BOT_NAME, site_url):
             raise ScanError("robots.txt disallows scanning this careers page.")
-        time.sleep(delay)
-        status, content_type, listing = _read_response(client, site_url, MAX_PAGE_BYTES)
-        if status != 200 or "html" not in content_type:
-            raise ScanError("The careers page did not return a readable HTML page.")
-        candidates = _listing_candidates(listing, site_url)
+        if _is_direct_job_url(site_url):
+            candidates = [Candidate(site_url, "Job posting", "")]
+        else:
+            time.sleep(delay)
+            status, content_type, listing = _read_response(client, site_url, MAX_PAGE_BYTES)
+            if status == 404 or status == 410:
+                raise ScanError("The monitored careers page returned 404 or 410. Update it to the employer's current careers URL.")
+            if 300 <= status < 400:
+                raise ScanError("The monitored careers page redirected. Add the destination careers URL directly.")
+            if status != 200 or "html" not in content_type:
+                raise ScanError("The careers page did not return a readable HTML page.")
+            candidates = _listing_candidates(listing, site_url)
         if not candidates:
             return [], 0, ["No same-site job links were found. Try the company's direct careers or ATS page."]
 
         postings: list[ScannedPosting] = []
         skipped = 0
         unverified = 0
-        unrelated = 0
+        not_found = 0
+        forbidden = 0
+        redirected = 0
+        javascript_challenges = 0
         errors: list[str] = []
+        robots_by_origin = {_origin(site_url): (robots, delay)}
         for candidate in candidates:
-            if not robots.can_fetch(BOT_NAME, candidate.url):
+            candidate_origin = _origin(candidate.url)
+            if candidate_origin not in robots_by_origin:
+                try:
+                    robots_by_origin[candidate_origin] = _robots(client, candidate.url)
+                except ScanError as exc:
+                    skipped += 1
+                    if len(errors) < 3:
+                        errors.append(str(exc))
+                    continue
+            candidate_robots, candidate_delay = robots_by_origin[candidate_origin]
+            if not candidate_robots.can_fetch(BOT_NAME, candidate.url):
                 skipped += 1
                 continue
-            time.sleep(delay)
+            time.sleep(candidate_delay)
             try:
                 status, content_type, detail_html = _read_response(
                     client, candidate.url, MAX_PAGE_BYTES
                 )
                 if status != 200 or "html" not in content_type:
                     skipped += 1
+                    if status == 404 or status == 410:
+                        not_found += 1
+                    elif status in {401, 403}:
+                        forbidden += 1
+                    elif 300 <= status < 400:
+                        redirected += 1
                     continue
                 job_records = _structured_job_postings(detail_html)
                 verified = []
                 verified_at = datetime.now(timezone.utc)
                 cutoff = verified_at - timedelta(hours=freshness_hours)
+                requested_id = _external_job_id(candidate.url)
                 for record in job_records:
+                    record_identifier = record.get("identifier")
+                    if isinstance(record_identifier, dict):
+                        record_identifier = record_identifier.get("value") or record_identifier.get("name")
+                    if (
+                        requested_id is not None
+                        and record_identifier is not None
+                        and not re.sub(r"[^A-Za-z0-9._-]", "", str(record_identifier)).endswith(
+                            requested_id.rsplit(":", 1)[-1]
+                        )
+                    ):
+                        continue
                     posted_at = _parse_posted_at(record.get("datePosted"))
                     valid_through = _parse_valid_through(record.get("validThrough"))
                     record_title = record.get("title") or record.get("name")
@@ -466,6 +796,12 @@ def scan_career_site(
                 if not verified:
                     skipped += 1
                     unverified += 1
+                    challenge_text = detail_html.casefold()
+                    if any(marker in challenge_text for marker in (
+                        "javascript is disabled", "enable javascript", "verify that you're not a robot",
+                        "captcha", "checking your browser",
+                    )):
+                        javascript_challenges += 1
                     continue
                 record, posted_at = verified[0]
                 detail = _page_text(detail_html)
@@ -478,28 +814,63 @@ def scan_career_site(
                     if len(record_description) > len(description):
                         description = record_description[:12_000]
                 title = " ".join(str(record.get("title") or record.get("name") or candidate.title).split())
+                job_level, required_years = _job_experience(record, title, description)
+                role_context = _flatten_text(record.get("occupationalCategory"))
+                location = _job_location(record)
+                employment_type = _flatten_text(record.get("employmentType"))[:100] or None
+                description_for_match = " ".join((candidate.description, description, location or "", role_context))
                 score, terms = _score_posting(
-                    title, f"{candidate.description} {description}", preferences
+                    title, description_for_match, preferences,
+                    job_level=job_level,
+                    required_years=required_years,
+                    role_context=role_context,
                 )
-                if preferences.get("role_keywords") and not terms:
-                    skipped += 1
-                    unrelated += 1
-                    continue
                 postings.append(
                     ScannedPosting(
                         candidate.url, title, description, score, terms, posted_at,
+                        _external_job_id(candidate.url, record), job_level,
+                        location, employment_type,
                     )
                 )
             except ScanError as exc:
                 skipped += 1
                 if len(errors) < 3:
                     errors.append(str(exc))
-        if unverified and not postings:
+        if unverified:
             errors.append(
                 f"Skipped {unverified} listing(s): the actual posting page did not verify a JobPosting record dated within the last {freshness_hours} hours."
             )
-        if unrelated:
+        fits = score_postings_locally(postings, preferences)
+        if fits is None:
+            errors.append("Local AI scoring was unavailable; keyword-based scores were used for this scan.")
+        else:
+            for index, fit in fits.items():
+                posting = postings[index]
+                posting.score = round(
+                    fit.role_fit * 0.40
+                    + fit.skills_fit * 0.30
+                    + fit.experience_fit * 0.20
+                    + fit.preference_fit * 0.10
+                )
+                posting.matched_terms = [
+                    *fit.matched_evidence,
+                    f"Role fit {fit.role_fit}%",
+                    f"Experience fit {fit.experience_fit}%",
+                ]
+        if not_found:
             errors.append(
-                f"Skipped {unrelated} verified posting(s) because their titles did not match your target roles."
+                f"{not_found} posting link(s) returned 404 or 410. The source may have removed or moved those jobs; only live source pages are kept."
+            )
+        if redirected:
+            errors.append(
+                f"{redirected} posting page(s) redirected and were skipped. Add the final destination URL to monitor."
+            )
+        if forbidden:
+            errors.append(
+                f"{forbidden} posting page(s) denied automated access (401/403) and were skipped."
+            )
+        if javascript_challenges:
+            errors.append(
+                f"{javascript_challenges} posting page(s) returned a JavaScript or bot-verification challenge. The scanner skips those pages rather than bypassing the site's protection."
             )
         return postings, skipped, errors

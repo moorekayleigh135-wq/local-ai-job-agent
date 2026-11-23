@@ -31,8 +31,9 @@ def run_scheduled_scans() -> None:
             with SessionLocal() as db:
                 result = scan_company(company_id, db)
                 logger.info(
-                    "Scheduled scan complete for %s: %s new, %s alerts, %s skipped",
-                    result.company, result.new_count, result.notified_count, result.skipped_count,
+                    "Scheduled scan complete for %s: %s new, %s alerts, %s skipped; warnings: %s",
+                    result.company, result.new_count, result.notified_count,
+                    result.skipped_count, " | ".join(result.warnings) or "none",
                 )
         except HTTPException as exc:
             logger.warning("Scheduled scan skipped for company %s: %s", company_id, exc.detail)

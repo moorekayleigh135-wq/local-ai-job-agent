@@ -13,7 +13,7 @@ from app.company_discovery import CompanyDiscoveryError, discover_company_sites
 from app.config import settings
 from app.database import SessionLocal, get_db
 from app.models import (
-    BrowserPushSubscription, CareerSite, CompanyDiscoveryState,
+    BrowserPushSubscription, CareerSite, CandidateProfile, CompanyDiscoveryState,
     DiscoveredCareerSite, Job, JobNotification, JobScanMatch,
     NotificationSettings, SearchPreferences,
 )
@@ -300,6 +300,7 @@ def save_preferences(
     preferences.locations = payload.locations
     preferences.skills = payload.skills
     preferences.work_arrangements = payload.work_arrangements
+    preferences.experience_level = payload.experience_level
     preferences.min_match_score = payload.min_match_score
     db.commit()
     db.refresh(preferences)
@@ -397,6 +398,9 @@ def list_notifications(
             id=notice.id,
             job_id=job.id,
             job_title=job.title,
+            job_level=job.job_level,
+            location=job.location,
+            external_id=job.external_id,
             company=job.company,
             source_url=job.source_url,
             match_score=notice.match_score,
@@ -437,12 +441,41 @@ def scan_company(company_id: int, db: DatabaseSession) -> ScanSummary:
         "locations": preferences.locations,
         "skills": preferences.skills,
         "work_arrangements": preferences.work_arrangements,
+        "experience_level": preferences.experience_level,
         "min_match_score": preferences.min_match_score,
     }
+    candidate_profile_row = db.get(CandidateProfile, 1)
+    profile = {}
+    if candidate_profile_row and isinstance(candidate_profile_row.profile_data, dict):
+        profile = candidate_profile_row.profile_data.get("profile", candidate_profile_row.profile_data)
+    if isinstance(profile, dict):
+        profile_roles = [
+            value.strip() for value in profile.get("role_keywords", [])
+            if isinstance(value, str) and value.strip()
+        ]
+        experience_titles = [
+            item.get("title", "").strip()
+            for item in profile.get("experience", [])
+            if isinstance(item, dict) and isinstance(item.get("title"), str) and item["title"].strip()
+        ]
+        headline = profile.get("headline")
+        if isinstance(headline, str) and headline.strip():
+            experience_titles.insert(0, headline.strip())
+        preference_data["role_keywords"] = list(dict.fromkeys(
+            [*preferences.role_keywords, *profile_roles, *experience_titles[:5]]
+        ))
+        profile_skills = [
+            value.strip() for value in profile.get("skills", [])
+            if isinstance(value, str) and value.strip()
+        ]
+        preference_data["skills"] = list(dict.fromkeys(
+            [*preferences.skills, *profile_skills[:20]]
+        ))
+        preference_data["candidate_years_experience"] = profile.get("years_experience")
+        preference_data["candidate_profile"] = profile
     try:
         postings, skipped_count, warnings = scan_career_site(
-            site.url, preference_data,
-            freshness_hours=settings.new_job_window_hours,
+            site.url, preference_data, settings.new_job_window_hours,
         )
     except ScanError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -469,11 +502,17 @@ def scan_company(company_id: int, db: DatabaseSession) -> ScanSummary:
         else:
             below_threshold_count += 1
         job = db.scalar(select(Job).where(Job.source_url == posting.url).limit(1))
+        if job is None and posting.external_id:
+            job = db.scalar(select(Job).where(Job.external_id == posting.external_id).limit(1))
         is_new_listing = job is None
         if job is None:
             job = Job(
                 title=posting.title,
                 company=site.name,
+                external_id=posting.external_id,
+                job_level=posting.job_level,
+                location=posting.location,
+                employment_type=posting.employment_type,
                 source_url=posting.url,
                 description=posting.description,
                 skills=[],
@@ -485,6 +524,11 @@ def scan_company(company_id: int, db: DatabaseSession) -> ScanSummary:
         else:
             job.title = posting.title
             job.company = site.name
+            job.external_id = posting.external_id or job.external_id
+            job.job_level = posting.job_level
+            job.location = posting.location
+            job.employment_type = posting.employment_type
+            job.source_url = posting.url
             job.description = posting.description
             updated_count += 1
 

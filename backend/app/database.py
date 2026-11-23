@@ -73,7 +73,9 @@ def migrate_legacy_personal_data(database_engine=engine) -> None:
                 {"payload": json.dumps(encrypted), "id": row["id"]},
             )
 
-        personal_columns = ("role_keywords", "locations", "skills", "work_arrangements")
+        personal_columns = (
+            "role_keywords", "locations", "skills", "work_arrangements", "experience_level"
+        )
         selected = ", ".join(("id", *personal_columns))
         preferences = connection.execute(
             text(f"SELECT {selected} FROM search_preferences")
@@ -83,9 +85,13 @@ def migrate_legacy_personal_data(database_engine=engine) -> None:
             assignments: list[str] = []
             for column in personal_columns:
                 value = decode_database_json(row[column])
+                if value is None:
+                    continue
                 if isinstance(value, str) and value.startswith(ENCRYPTED_PREFIX):
                     continue
-                updates[column] = json.dumps(encrypt_json(value or []))
+                updates[column] = json.dumps(
+                    encrypt_json(value if column == "experience_level" else value or [])
+                )
                 assignments.append(f"{column} = {json_cast.replace(':payload', ':' + column)}")
             if assignments:
                 connection.execute(
@@ -119,3 +125,23 @@ def migrate_notification_posted_at(database_engine=engine) -> None:
     if "posted_at" not in columns:
         with database_engine.begin() as connection:
             connection.execute(text("ALTER TABLE job_notifications ADD COLUMN posted_at DATETIME NULL"))
+
+
+def migrate_job_external_id(database_engine=engine) -> None:
+    """Add source-owned job IDs so query-string postings can be deduplicated."""
+    inspector = inspect(database_engine)
+    columns = {column["name"] for column in inspector.get_columns("jobs")}
+    if "external_id" not in columns:
+        with database_engine.begin() as connection:
+            connection.execute(text("ALTER TABLE jobs ADD COLUMN external_id VARCHAR(160) NULL"))
+    if not any(index["name"] == "ix_jobs_external_id" for index in inspector.get_indexes("jobs")):
+        with database_engine.begin() as connection:
+            connection.execute(text("CREATE INDEX ix_jobs_external_id ON jobs (external_id)"))
+
+
+def migrate_search_experience_level(database_engine=engine) -> None:
+    """Add the encrypted target experience level to older search profiles."""
+    columns = {column["name"] for column in inspect(database_engine).get_columns("search_preferences")}
+    if "experience_level" not in columns:
+        with database_engine.begin() as connection:
+            connection.execute(text("ALTER TABLE search_preferences ADD COLUMN experience_level JSON NULL"))

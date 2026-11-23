@@ -97,6 +97,10 @@ def _career_page_url(url: str) -> str:
     def matches_domain(domain: str) -> bool:
         return host == domain or host.endswith("." + domain)
 
+    if matches_domain("ibm.com"):
+        if host == "ibm.com" or host == "www.ibm.com":
+            return "https://www.ibm.com/careers/search"
+        return "https://careers.ibm.com/en_US/careers"
     if any(matches_domain(domain) for domain in (
         "greenhouse.io", "lever.co", "ashbyhq.com", "smartrecruiters.com"
     )):

@@ -20,6 +20,7 @@ class Job(Base):
     employment_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
     job_level: Mapped[str | None] = mapped_column(String(100), nullable=True)
     work_arrangement: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    external_id: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
     source_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     skills: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
@@ -110,6 +111,7 @@ class SearchPreferences(Base):
     locations: Mapped[list[str]] = mapped_column(EncryptedJSON(), default=list, nullable=False)
     skills: Mapped[list[str]] = mapped_column(EncryptedJSON(), default=list, nullable=False)
     work_arrangements: Mapped[list[str]] = mapped_column(EncryptedJSON(), default=list, nullable=False)
+    experience_level: Mapped[str | None] = mapped_column(EncryptedJSON(), nullable=True)
     min_match_score: Mapped[int] = mapped_column(Integer, default=40, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now(), nullable=False

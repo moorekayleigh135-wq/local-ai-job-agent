@@ -16,6 +16,7 @@ from app.auth import account_for_token, router as auth_router, COOKIE_NAME
 from app.database import (
     Base, SessionLocal, check_database_connection, engine,
     migrate_legacy_personal_data, migrate_notification_posted_at,
+    migrate_job_external_id, migrate_search_experience_level,
 )
 from app.security import validate_encryption_key
 from app.jobs import router as jobs_router
@@ -30,8 +31,10 @@ async def lifespan(app: FastAPI):
     """Initialize database tables when the API starts."""
     validate_encryption_key()
     Base.metadata.create_all(bind=engine)
+    migrate_search_experience_level()
     migrate_legacy_personal_data()
     migrate_notification_posted_at()
+    migrate_job_external_id()
     ensure_vapid_keys()
     scan_task = asyncio.create_task(scheduled_scan_loop(), name="company-scan-scheduler")
     try:

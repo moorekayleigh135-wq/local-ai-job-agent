@@ -48,6 +48,7 @@ class JobRead(BaseModel):
     employment_type: str | None
     job_level: str | None
     work_arrangement: str | None
+    external_id: str | None
     source_url: str | None
     description: str
     skills: list[str]
@@ -102,6 +103,7 @@ class SearchPreferencesUpdate(BaseModel):
     locations: list[str] = Field(default_factory=list, max_length=20)
     skills: list[str] = Field(default_factory=list, max_length=50)
     work_arrangements: list[str] = Field(default_factory=list, max_length=3)
+    experience_level: str | None = Field(default=None, max_length=30)
     min_match_score: int = Field(default=40, ge=0, le=100)
 
     def model_post_init(self, __context) -> None:
@@ -113,6 +115,8 @@ class SearchPreferencesUpdate(BaseModel):
         ]
         if any(item not in {"remote", "hybrid", "onsite"} for item in self.work_arrangements):
             raise ValueError("Work arrangements must be remote, hybrid, or onsite.")
+        if self.experience_level not in {None, "any", "internship", "entry_level", "professional", "senior", "executive"}:
+            raise ValueError("Choose any, internship, entry level, professional, senior, or executive.")
 
 
 class SearchPreferencesRead(SearchPreferencesUpdate):
@@ -147,6 +151,9 @@ class JobNotificationRead(BaseModel):
     id: int
     job_id: int
     job_title: str | None
+    job_level: str | None
+    location: str | None
+    external_id: str | None
     company: str | None
     source_url: str | None
     match_score: int
