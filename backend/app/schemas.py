@@ -1,5 +1,6 @@
 """Pydantic schemas for job API requests and responses."""
 from datetime import datetime
+from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 
@@ -96,7 +97,7 @@ class CompanyDiscoveryRead(BaseModel):
     last_run_at: datetime | None
     message: str | None = None
     last_error: str | None = None
-    suggestions: list[DiscoveredCareerSiteRead] = Field(default_factory=list)
+    suggestions: list[DiscoveredCareerSiteRead] = Field(default_factory=list, max_length=50)
 
 
 class SearchPreferencesUpdate(BaseModel):
@@ -144,7 +145,7 @@ class ScannedJobRead(BaseModel):
     match_score: int
     recommendation: str
     recommendation_tip: str
-    matched_terms: list[str]
+    matched_terms: list[str] = Field(max_length=50)
     scanned_at: datetime
 
 
@@ -161,9 +162,13 @@ class JobNotificationRead(BaseModel):
     posted_at: datetime | None
     recommendation: str
     recommendation_tip: str
-    matched_terms: list[str]
+    matched_terms: list[str] = Field(max_length=50)
     created_at: datetime
     read_at: datetime | None
+
+
+ScannedJobList = Annotated[list[ScannedJobRead], Field(max_length=50)]
+JobNotificationList = Annotated[list[JobNotificationRead], Field(max_length=50)]
 
 
 class ScanSummary(BaseModel):

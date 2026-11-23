@@ -740,7 +740,7 @@ def _score_posting(
             coverage = len(hits) / len(cleaned)
         score += weight * coverage
         matched.extend(hits)
-    return round(100 * score / configured_weight), matched
+    return round(100 * score / configured_weight), matched[:50]
 
 
 def scan_career_site(

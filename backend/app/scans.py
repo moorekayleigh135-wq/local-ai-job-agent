@@ -36,8 +36,10 @@ from app.schemas import (
     ScannedJobRead,
     SearchPreferencesRead,
     SearchPreferencesUpdate,
+    ScannedJobList,
     NotificationSettingsRead,
     NotificationSettingsUpdate,
+    JobNotificationList,
     MatchThresholdUpdate,
 )
 
@@ -365,7 +367,7 @@ def save_notification_settings(
     return NotificationSettingsRead.model_validate(saved, from_attributes=True)
 
 
-@router.get("/matches", response_model=list[ScannedJobRead])
+@router.get("/matches", response_model=ScannedJobList)
 def list_matches(
     db: DatabaseSession,
     limit: int = Query(default=50, ge=1, le=50),
@@ -386,14 +388,14 @@ def list_matches(
             match_score=match.match_score,
             recommendation=recommendation_for_score(match.match_score),
             recommendation_tip=recommendation_tip_for_score(match.match_score),
-            matched_terms=match.matched_terms,
+            matched_terms=match.matched_terms[:50],
             scanned_at=match.scanned_at,
         )
         for match, job in rows
     ]
 
 
-@router.get("/notifications", response_model=list[JobNotificationRead])
+@router.get("/notifications", response_model=JobNotificationList)
 def list_notifications(
     db: DatabaseSession,
     unread_only: bool = True,
@@ -426,7 +428,7 @@ def list_notifications(
             posted_at=notice.posted_at,
             recommendation=recommendation_for_score(notice.match_score),
             recommendation_tip=recommendation_tip_for_score(notice.match_score),
-            matched_terms=match.matched_terms if match else [],
+            matched_terms=match.matched_terms[:50] if match else [],
             created_at=notice.created_at,
             read_at=notice.read_at,
         )

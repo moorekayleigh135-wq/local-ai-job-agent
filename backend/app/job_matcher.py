@@ -20,7 +20,7 @@ class PostingFit(BaseModel):
 
 
 class PostingFitBatch(BaseModel):
-    results: list[PostingFit] = Field(default_factory=list)
+    results: list[PostingFit] = Field(default_factory=list, max_length=50)
 
 
 def score_postings_locally(
