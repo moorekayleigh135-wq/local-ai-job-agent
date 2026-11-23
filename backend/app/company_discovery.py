@@ -174,10 +174,27 @@ def discover_company_sites(role_keywords: list[str], locations: list[str]) -> li
                         return list(found.values())
     except CompanyDiscoveryError:
         raise
+    except httpx.HTTPStatusError as exc:
+        status_code = exc.response.status_code
+        try:
+            payload = exc.response.json()
+        except ValueError:
+            payload = {}
+        error = payload.get("error", {}) if isinstance(payload, dict) else {}
+        error_code = error.get("code") if isinstance(error, dict) else None
+        if status_code in {401, 403} or error_code == "SUBSCRIPTION_TOKEN_INVALID":
+            raise CompanyDiscoveryError(
+                "Brave Search rejected the API key. Replace BRAVE_SEARCH_API_KEY with a valid subscription token."
+            ) from exc
+        raise CompanyDiscoveryError(
+            f"Brave Search rejected the request (HTTP {status_code}). Check the provider response and search settings."
+        ) from exc
     except httpx.TimeoutException as exc:
         raise CompanyDiscoveryError("Brave Search timed out. Discovery will retry later.") from exc
     except httpx.HTTPError as exc:
-        raise CompanyDiscoveryError("Brave Search could not be reached. Check the server's internet connection.") from exc
+        raise CompanyDiscoveryError(
+            "Brave Search could not be reached because of a network or TLS connection error."
+        ) from exc
     except (ValueError, TypeError) as exc:
         raise CompanyDiscoveryError("Brave Search returned an unreadable response.") from exc
     return list(found.values())
