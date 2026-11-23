@@ -429,6 +429,40 @@ def _read_response(client: httpx.Client, url: str, byte_limit: int) -> tuple[int
         raise ScanError("The website could not be reached. Check the URL and try again later.") from exc
 
 
+def _render_with_browser(url: str, site_url: str) -> str | None:
+    """Ask the isolated renderer for a bounded public page DOM."""
+    from app.config import settings
+
+    try:
+        response = httpx.post(
+            f"{settings.js_renderer_url.rstrip('/')}/render",
+            json={"url": url, "site_url": site_url},
+            timeout=httpx.Timeout(22.0, connect=3.0),
+        )
+        response.raise_for_status()
+        payload = response.json()
+        html = payload.get("html") if isinstance(payload, dict) else None
+        rendered_url = payload.get("url") if isinstance(payload, dict) else None
+        if (
+            isinstance(html, str)
+            and len(html.encode("utf-8")) <= MAX_PAGE_BYTES
+            and isinstance(rendered_url, str)
+            and _same_job_site(site_url, rendered_url)
+        ):
+            return html
+    except (httpx.HTTPError, ValueError, TypeError):
+        return None
+    return None
+
+
+def _is_verification_challenge(html: str) -> bool:
+    text = html.casefold()
+    return any(marker in text for marker in (
+        "javascript is disabled", "enable javascript", "verify that you're not a robot",
+        "captcha", "checking your browser", "unusual traffic", "security check",
+    ))
+
+
 def _robots(client: httpx.Client, site_url: str) -> tuple[RobotFileParser, float]:
     parsed = urlsplit(site_url)
     robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
@@ -725,8 +759,23 @@ def scan_career_site(
             if status != 200 or "html" not in content_type:
                 raise ScanError("The careers page did not return a readable HTML page.")
             candidates = _listing_candidates(listing, site_url)
+            listing_challenge = _is_verification_challenge(listing)
+            listing_render_failed = False
+            if not candidates and not listing_challenge:
+                rendered_listing = _render_with_browser(site_url, site_url)
+                if rendered_listing is None:
+                    listing_render_failed = True
+                elif _is_verification_challenge(rendered_listing):
+                    listing_challenge = True
+                else:
+                    candidates = _listing_candidates(rendered_listing, site_url)
         if not candidates:
-            return [], 0, ["No same-site job links were found. Try the company's direct careers or ATS page."]
+            warnings = ["No same-site job links were found. Try the company's direct careers or ATS page."]
+            if not _is_direct_job_url(site_url) and listing_challenge:
+                warnings.append("The listing is behind a JavaScript or bot-verification challenge; the scanner will not bypass it.")
+            if not _is_direct_job_url(site_url) and listing_render_failed:
+                warnings.append("The isolated JavaScript reader could not render the listing page.")
+            return [], 0, warnings
 
         postings: list[ScannedPosting] = []
         skipped = 0
@@ -735,6 +784,8 @@ def scan_career_site(
         forbidden = 0
         redirected = 0
         javascript_challenges = 0
+        render_failures = 0
+        rendered_pages = 0
         errors: list[str] = []
         robots_by_origin = {_origin(site_url): (robots, delay)}
         for candidate in candidates:
@@ -766,6 +817,20 @@ def scan_career_site(
                         redirected += 1
                     continue
                 job_records = _structured_job_postings(detail_html)
+                if (
+                    not job_records
+                    and rendered_pages < 3
+                    and not _is_verification_challenge(detail_html)
+                ):
+                    rendered_pages += 1
+                    rendered_detail = _render_with_browser(candidate.url, site_url)
+                    if rendered_detail is None:
+                        render_failures += 1
+                    elif _is_verification_challenge(rendered_detail):
+                        javascript_challenges += 1
+                    else:
+                        detail_html = rendered_detail
+                        job_records = _structured_job_postings(detail_html)
                 verified = []
                 verified_at = datetime.now(timezone.utc)
                 cutoff = verified_at - timedelta(hours=freshness_hours)
@@ -796,11 +861,7 @@ def scan_career_site(
                 if not verified:
                     skipped += 1
                     unverified += 1
-                    challenge_text = detail_html.casefold()
-                    if any(marker in challenge_text for marker in (
-                        "javascript is disabled", "enable javascript", "verify that you're not a robot",
-                        "captcha", "checking your browser",
-                    )):
+                    if _is_verification_challenge(detail_html):
                         javascript_challenges += 1
                     continue
                 record, posted_at = verified[0]
@@ -872,5 +933,9 @@ def scan_career_site(
         if javascript_challenges:
             errors.append(
                 f"{javascript_challenges} posting page(s) returned a JavaScript or bot-verification challenge. The scanner skips those pages rather than bypassing the site's protection."
+            )
+        if render_failures:
+            errors.append(
+                f"The isolated JavaScript reader could not render {render_failures} posting page(s). Check that the browser service is running; static scanning still works."
             )
         return postings, skipped, errors

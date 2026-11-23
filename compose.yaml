@@ -83,6 +83,7 @@ services:
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3:8b}
       SCAN_INTERVAL_MINUTES: ${SCAN_INTERVAL_MINUTES:-60}
       NEW_JOB_WINDOW_HOURS: ${NEW_JOB_WINDOW_HOURS:-720}
+      JS_RENDERER_URL: http://renderer:8090
     depends_on:
       db:
         condition: service_healthy
@@ -90,10 +91,13 @@ services:
         condition: service_healthy
       search:
         condition: service_healthy
+      renderer:
+        condition: service_healthy
     ports:
       - "127.0.0.1:${API_PORT:-8000}:8000"
     networks:
       - agent_network
+      - renderer_control
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=32m
@@ -108,8 +112,40 @@ services:
       retries: 5
       start_period: 15s
 
+  renderer:
+    build:
+      context: ./renderer
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=128m
+    shm_size: 1gb
+    mem_limit: 2g
+    cpus: 2.0
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./renderer/seccomp_profile.json
+    cap_drop:
+      - ALL
+    networks:
+      - renderer_control
+      - renderer_egress
+    # The browser receives no database, Ollama, or user-profile credentials.
+    # It is reachable only by the API over the private control network.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=3)"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
 networks:
   agent_network:
+    driver: bridge
+  renderer_control:
+    internal: true
+  renderer_egress:
     driver: bridge
 
 volumes:
