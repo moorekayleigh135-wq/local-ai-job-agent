@@ -42,6 +42,11 @@ DatabaseSession = Annotated[Session, Depends(get_db)]
 
 def _discovery_response(db: Session, message: str | None = None) -> CompanyDiscoveryRead:
     state = db.get(CompanyDiscoveryState, 1)
+    if state and state.last_error and state.last_error.startswith("Brave Search"):
+        # Clear provider-specific failures retained from installations upgraded
+        # from the previous paid search integration.
+        state.last_error = None
+        db.commit()
     suggestions = db.scalars(
         select(DiscoveredCareerSite)
         .where(DiscoveredCareerSite.dismissed.is_(False))
