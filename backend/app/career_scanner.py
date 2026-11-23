@@ -332,12 +332,48 @@ def _listing_candidates(html: str, page_url: str) -> list[Candidate]:
     return candidates[:MAX_JOB_PAGES]
 
 
-def _score_posting(text: str, preferences: dict) -> tuple[int, list[str]]:
+ROLE_TOKEN_ALIASES = {
+    "analyst": "analytics",
+    "analysis": "analytics",
+    "consultant": "consulting",
+    "consultancy": "consulting",
+    "strategist": "strategy",
+    "manager": "management",
+    "management": "management",
+    "engineer": "engineering",
+}
+ROLE_STOP_WORDS = {"a", "an", "and", "for", "in", "of", "the", "to"}
+
+
+def _role_tokens(value: str) -> list[str]:
+    tokens = re.findall(r"[a-z0-9]+", value.casefold())
+    return [ROLE_TOKEN_ALIASES.get(token, token) for token in tokens]
+
+
+def _role_matches_title(role: str, title: str) -> bool:
+    """Require the job title itself to identify a requested role family."""
+    role_tokens = [token for token in _role_tokens(role) if token not in ROLE_STOP_WORDS]
+    title_tokens = _role_tokens(title)
+    if not role_tokens or not title_tokens:
+        return False
+    if " ".join(role_tokens) in " ".join(title_tokens):
+        return True
+    shared = set(role_tokens) & set(title_tokens)
+    if len(role_tokens) == 1:
+        return bool(shared)
+    return len(shared) >= 2 and len(shared) / len(set(role_tokens)) >= 0.5
+
+
+def _score_posting(title: str, text: str, preferences: dict) -> tuple[int, list[str]]:
     searchable = " ".join(text.casefold().split())
+    roles = [str(term).strip() for term in preferences.get("role_keywords", []) if str(term).strip()]
+    matched_roles = [role for role in roles if _role_matches_title(role, title)]
+    if roles and not matched_roles:
+        return 0, []
     groups = [
-        (preferences.get("role_keywords", []), 0.45),
-        (preferences.get("locations", []), 0.20),
-        (preferences.get("skills", []), 0.25),
+        (roles, 0.55),
+        (preferences.get("locations", []), 0.15),
+        (preferences.get("skills", []), 0.20),
         (preferences.get("work_arrangements", []), 0.10),
     ]
     configured_weight = sum(weight for terms, weight in groups if terms)
@@ -345,9 +381,15 @@ def _score_posting(text: str, preferences: dict) -> tuple[int, list[str]]:
         raise ScanError("Add at least one role, location, skill, or work-style preference before scanning.")
     score = 0.0
     matched: list[str] = []
-    for terms, weight in groups:
+    for group_index, (terms, weight) in enumerate(groups):
         cleaned = [str(term).casefold().strip() for term in terms if str(term).strip()]
         if not cleaned:
+            continue
+        if group_index == 0:
+            # Roles are alternatives: match one requested title family instead
+            # of penalizing a posting because the profile contains many roles.
+            score += weight
+            matched.extend(matched_roles)
             continue
         hits = []
         for term in cleaned:
@@ -391,6 +433,7 @@ def scan_career_site(
         postings: list[ScannedPosting] = []
         skipped = 0
         unverified = 0
+        unrelated = 0
         errors: list[str] = []
         for candidate in candidates:
             if not robots.can_fetch(BOT_NAME, candidate.url):
@@ -436,8 +479,12 @@ def scan_career_site(
                         description = record_description[:12_000]
                 title = " ".join(str(record.get("title") or record.get("name") or candidate.title).split())
                 score, terms = _score_posting(
-                    f"{title} {candidate.description} {description}", preferences
+                    title, f"{candidate.description} {description}", preferences
                 )
+                if preferences.get("role_keywords") and not terms:
+                    skipped += 1
+                    unrelated += 1
+                    continue
                 postings.append(
                     ScannedPosting(
                         candidate.url, title, description, score, terms, posted_at,
@@ -450,5 +497,9 @@ def scan_career_site(
         if unverified and not postings:
             errors.append(
                 f"Skipped {unverified} listing(s): the actual posting page did not verify a JobPosting record dated within the last {freshness_hours} hours."
+            )
+        if unrelated:
+            errors.append(
+                f"Skipped {unrelated} verified posting(s) because their titles did not match your target roles."
             )
         return postings, skipped, errors
