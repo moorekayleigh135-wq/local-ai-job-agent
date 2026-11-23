@@ -51,6 +51,7 @@ services:
       SEARXNG_BIND_ADDRESS: 0.0.0.0
       SEARXNG_PORT: "8080"
       SEARXNG_SECRET: ${SEARXNG_SECRET:?Set SEARXNG_SECRET in .env}
+      SEARXNG_CONTACT_URL: mailto:jobharbor@localhost
       SEARXNG_LIMITER: "false"
     volumes:
       - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
