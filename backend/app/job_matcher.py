@@ -75,7 +75,7 @@ CANDIDATE PROFILE (stored locally):
 {json.dumps(compact_profile, ensure_ascii=False)}
 
 SEARCH PREFERENCES:
-{json.dumps({key: preferences.get(key) for key in ('role_keywords', 'skills', 'locations', 'work_arrangements', 'experience_level')}, ensure_ascii=False)}
+{json.dumps({key: preferences.get(key) for key in ('role_keywords', 'skills', 'locations', 'work_arrangements', 'experience_level', 'effective_experience_level')}, ensure_ascii=False)}
 
 VERIFIED SOURCE POSTINGS:
 {json.dumps(jobs, ensure_ascii=False)}"""

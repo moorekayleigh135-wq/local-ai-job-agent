@@ -30,6 +30,7 @@ class CandidateProfileData(BaseModel):
 class CandidateProfileRead(BaseModel):
     filename: str
     profile: CandidateProfileData
+    inferred_experience_level: str | None = None
     updated_at: datetime
 
 
@@ -127,7 +128,7 @@ class SearchPreferencesRead(SearchPreferencesUpdate):
 
 class NotificationSettingsUpdate(BaseModel):
     scan_interval_minutes: int = Field(default=60, ge=15, le=1440)
-    max_notifications_per_day: int = Field(default=10, ge=1, le=100)
+    max_notifications_per_day: int = Field(default=10, ge=1, le=50)
 
 
 class NotificationSettingsRead(NotificationSettingsUpdate):

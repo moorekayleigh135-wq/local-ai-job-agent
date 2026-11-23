@@ -87,7 +87,7 @@
     }
     async function load() {
       try {
-        const response = await fetch('/jobs?limit=100');
+        const response = await fetch('/jobs?limit=50');
         if (!response.ok) throw new Error('Could not load opportunities. Refresh and try again.');
         jobs = await response.json();
         render();

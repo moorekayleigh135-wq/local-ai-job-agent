@@ -20,19 +20,28 @@ EXCLUDED_DOMAINS = {
     "adzuna.com",
     "builtin.com",
     "wellfound.com",
+    "shifts.com",
+    "tealhq.com",
 }
 CAREER_HINTS = (
     "career", "jobs", "job", "workday", "greenhouse", "lever", "ashby",
     "smartrecruiters", "workable", "icims", "employment", "talent",
 )
 CAREER_PATH_HINTS = {"careers", "career", "jobs", "job", "openings", "positions"}
+ROLE_STOP_WORDS = {"a", "an", "and", "for", "in", "of", "the", "to", "job", "jobs", "career", "careers"}
+SENIOR_TITLE_PATTERN = re.compile(
+    r"\b(senior|sr\.?|staff|principal|lead|director|vp|vice president|chief|head of|manager)\b",
+    re.I,
+)
 
 
 class CompanyDiscoveryError(ValueError):
     """The configured search provider could not discover employer sites."""
 
 
-def _query_groups(role_keywords: list[str], locations: list[str]) -> list[str]:
+def _query_groups(
+    role_keywords: list[str], locations: list[str], experience_level: str | None = None
+) -> list[str]:
     roles = [" ".join(term.split())[:60] for term in role_keywords if term.strip()][:8]
     places = [" ".join(term.split())[:60] for term in locations if term.strip()][:4]
     if not roles:
@@ -50,10 +59,39 @@ def _query_groups(role_keywords: list[str], locations: list[str]) -> list[str]:
         # individual posting directly at its employer/board URL before saving
         # or alerting; snippets and AI summaries are never treated as evidence.
         q = f'("careers" OR "jobs" OR "job openings" OR "job posting") ({group_clause})'
+        level_terms = {
+            "internship": '("internship" OR "intern")',
+            "entry_level": '("entry-level" OR "early career" OR "junior")',
+        }.get(experience_level)
+        if level_terms:
+            q += f" {level_terms}"
         if location_clause:
             q += f" ({location_clause})"
         queries.append(q)
     return queries
+
+
+def is_excluded_company_url(url: str) -> bool:
+    host = (urlsplit(url).hostname or "").casefold().rstrip(".")
+    return any(host == domain or host.endswith("." + domain) for domain in EXCLUDED_DOMAINS)
+
+
+def _role_tokens(value: str) -> set[str]:
+    return {
+        token for token in re.findall(r"[a-z0-9]+", value.casefold())
+        if token not in ROLE_STOP_WORDS and (len(token) >= 3 or token in {"it", "qa"})
+    }
+
+
+def _role_relevant(text: str, role_keywords: list[str]) -> bool:
+    role_tokens = set().union(*(_role_tokens(role) for role in role_keywords))
+    return bool(role_tokens & _role_tokens(text))
+
+
+def _is_too_senior(title: str, experience_level: str | None) -> bool:
+    return experience_level in {"internship", "entry_level"} and bool(
+        SENIOR_TITLE_PATTERN.search(title)
+    )
 
 
 def _is_candidate_url(url: object) -> bool:
@@ -121,7 +159,9 @@ def _career_page_url(url: str) -> str:
     return parsed._replace(path=path, query="", fragment="").geturl().rstrip("/")
 
 
-def discover_company_sites(role_keywords: list[str], locations: list[str]) -> list[dict[str, str]]:
+def discover_company_sites(
+    role_keywords: list[str], locations: list[str], experience_level: str | None = None
+) -> list[dict[str, str]]:
     """Search through the local SearXNG instance using saved role/location terms."""
     search_url = f"{settings.searxng_url.rstrip('/')}{SEARXNG_SEARCH_PATH}"
     found: dict[str, dict[str, str]] = {}
@@ -130,7 +170,7 @@ def discover_company_sites(role_keywords: list[str], locations: list[str]) -> li
             timeout=httpx.Timeout(30.0, connect=5.0),
             headers={"Accept": "application/json"},
         ) as client:
-            for query in _query_groups(role_keywords, locations):
+            for query in _query_groups(role_keywords, locations, experience_level):
                 response = client.get(
                     search_url,
                     params={
@@ -158,10 +198,14 @@ def discover_company_sites(role_keywords: list[str], locations: list[str]) -> li
                         continue
                     if not isinstance(description, str):
                         description = ""
+                    signals = f"{title} {url} {description}".casefold()
+                    if _is_too_senior(title, experience_level):
+                        continue
+                    if not _role_relevant(signals, role_keywords):
+                        continue
                     # Never present search snippets (including AI-generated
                     # summaries) as verified job details.
                     description = ""
-                    signals = f"{title} {url} {description}".casefold()
                     if not any(hint in signals for hint in CAREER_HINTS):
                         continue
                     normalized_url = _career_page_url(url)

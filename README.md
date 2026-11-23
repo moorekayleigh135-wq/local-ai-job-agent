@@ -158,6 +158,10 @@ sudo tailscale serve status
 
 Open the HTTPS address printed by Tailscale on the host and on a phone that is connected to the same tailnet. The background Serve configuration persists across host restarts while Tailscale is running. Tailscale Serve is tailnet-only; do not use Tailscale Funnel for this private dashboard. Enabling HTTPS certificates publishes the device and tailnet DNS names to the public Certificate Transparency log, but does not make the dashboard itself public. Avoid sensitive information in the machine name. See [Tailscale HTTPS certificate details](https://tailscale.com/docs/how-to/set-up-https-certificates) and the [`tailscale serve` reference](https://tailscale.com/docs/reference/tailscale-cli/serve).
 
+## Search limits and experience matching
+
+Saved opportunities, match recommendations, and alert lists return at most 50 items, and the daily new-alert setting is capped at 50. When **Target experience level** is set to **Any level**, the scanner derives a level from the locally stored resume profile, including years of experience and in-progress education. It uses that level and any stated job-level or years requirements to constrain the final match percentage; entry-level searches also omit senior/director company-search results. Resume contents are not sent to the discovery search service.
+
 ## Useful commands
 
 ```bash

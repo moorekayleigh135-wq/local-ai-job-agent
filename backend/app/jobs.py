@@ -44,7 +44,7 @@ def create_job(payload: JobCreate, db: DatabaseSession) -> Job:
 @router.get("", response_model=list[JobRead])
 def list_jobs(
     db: DatabaseSession,
-    limit: int = Query(default=50, ge=1, le=100),
+    limit: int = Query(default=50, ge=1, le=50),
     offset: int = Query(default=0, ge=0),
 ) -> list[Job]:
     """List saved jobs, newest first."""

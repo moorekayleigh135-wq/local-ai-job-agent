@@ -54,6 +54,7 @@ class ScannedPosting:
     job_level: str | None = None
     location: str | None = None
     employment_type: str | None = None
+    experience_compatibility: int | None = None
 
 
 def _parse_posted_at(value: object) -> datetime | None:
@@ -328,9 +329,20 @@ def _experience_score(
     if target_level in level_labels:
         target = level_labels[target_level]
         levels = {"Internship": 0, "Entry level": 1, "Professional": 2, "Senior": 3, "Executive": 4}
-        if job_level not in levels:
-            return None
-        return max(30, 100 - abs(levels[target] - levels[job_level]) * 25)
+        level_score = (
+            max(0, 100 - abs(levels[target] - levels[job_level]) * 25)
+            if job_level in levels else None
+        )
+        years_score = None
+        if (
+            isinstance(candidate_years, (int, float))
+            and not isinstance(candidate_years, bool)
+            and required_years is not None
+        ):
+            gap = max(0.0, required_years - max(0.0, float(candidate_years)))
+            years_score = max(0, round(100 - gap * 25))
+        scores = [score for score in (level_score, years_score) if score is not None]
+        return min(scores) if scores else None
     if not isinstance(candidate_years, (int, float)) or isinstance(candidate_years, bool):
         return None
     years = max(0.0, float(candidate_years))
@@ -344,7 +356,7 @@ def _experience_score(
     if job_level not in levels:
         return None
     gap = abs(levels[candidate_level] - levels[job_level])
-    return max(30, 100 - gap * 25)
+    return max(0, 100 - gap * 25)
 
 
 def validate_public_url(url: str) -> str:
@@ -678,9 +690,10 @@ def _score_posting(
         (preferences.get("skills", []), 0.30),
         (preferences.get("work_arrangements", []), 0.05),
     ]
+    target_level = preferences.get("effective_experience_level") or preferences.get("experience_level")
     experience_score = _experience_score(
         preferences.get("candidate_years_experience"), required_years, job_level,
-        preferences.get("experience_level"),
+        target_level,
     )
     if experience_score is not None:
         groups.append((["experience"], 0.10))
@@ -703,7 +716,7 @@ def _score_posting(
             score += weight * experience_score / 100
             matched.append(
                 f"experience level: {job_level or 'not listed'}"
-                if preferences.get("experience_level") not in {None, "any"}
+                if target_level not in {None, "any"}
                 else f"experience: {job_level or f'{required_years:g}+ years'}"
             )
             continue
@@ -891,6 +904,11 @@ def scan_career_site(
                         candidate.url, title, description, score, terms, posted_at,
                         _external_job_id(candidate.url, record), job_level,
                         location, employment_type,
+                        _experience_score(
+                            preferences.get("candidate_years_experience"), required_years,
+                            job_level, preferences.get("effective_experience_level")
+                            or preferences.get("experience_level"),
+                        ),
                     )
                 )
             except ScanError as exc:
@@ -907,17 +925,25 @@ def scan_career_site(
         else:
             for index, fit in fits.items():
                 posting = postings[index]
+                experience_fit = fit.experience_fit
+                if posting.experience_compatibility is not None:
+                    experience_fit = min(experience_fit, posting.experience_compatibility)
                 posting.score = round(
                     fit.role_fit * 0.40
                     + fit.skills_fit * 0.30
-                    + fit.experience_fit * 0.20
+                    + experience_fit * 0.20
                     + fit.preference_fit * 0.10
                 )
+                if posting.experience_compatibility is not None:
+                    posting.score = min(posting.score, posting.experience_compatibility)
                 posting.matched_terms = [
                     *fit.matched_evidence,
                     f"Role fit {fit.role_fit}%",
-                    f"Experience fit {fit.experience_fit}%",
+                    f"Experience fit {experience_fit}%",
                 ]
+        for posting in postings:
+            if posting.experience_compatibility is not None:
+                posting.score = min(posting.score, posting.experience_compatibility)
         if not_found:
             errors.append(
                 f"{not_found} posting link(s) returned 404 or 410. The source may have removed or moved those jobs; only live source pages are kept."

@@ -9,9 +9,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.career_scanner import ScanError, scan_career_site
-from app.company_discovery import CompanyDiscoveryError, discover_company_sites
+from app.company_discovery import (
+    CompanyDiscoveryError,
+    discover_company_sites,
+    is_excluded_company_url,
+)
 from app.config import settings
 from app.database import SessionLocal, get_db
+from app.experience import target_experience_level
 from app.models import (
     BrowserPushSubscription, CareerSite, CandidateProfile, CompanyDiscoveryState,
     DiscoveredCareerSite, Job, JobNotification, JobScanMatch,
@@ -53,6 +58,7 @@ def _discovery_response(db: Session, message: str | None = None) -> CompanyDisco
         .order_by(DiscoveredCareerSite.discovered_at.desc())
         .limit(50)
     ).all()
+    suggestions = [item for item in suggestions if not is_excluded_company_url(item.url)]
     return CompanyDiscoveryRead(
         enabled=True,
         interval_hours=settings.company_discovery_interval_hours,
@@ -76,8 +82,15 @@ def _run_company_discovery(db: Session) -> CompanyDiscoveryRead:
     state.last_error = None
     db.commit()
 
+    candidate_profile_row = db.get(CandidateProfile, 1)
+    candidate_profile = {}
+    if candidate_profile_row and isinstance(candidate_profile_row.profile_data, dict):
+        candidate_profile = candidate_profile_row.profile_data.get("profile", candidate_profile_row.profile_data)
+    experience_level = target_experience_level(candidate_profile, preferences.experience_level)
     try:
-        results = discover_company_sites(preferences.role_keywords, preferences.locations)
+        results = discover_company_sites(
+            preferences.role_keywords, preferences.locations, experience_level
+        )
     except CompanyDiscoveryError as exc:
         state.last_error = str(exc)
         db.commit()
@@ -87,6 +100,12 @@ def _run_company_discovery(db: Session) -> CompanyDiscoveryRead:
         site.url.rstrip("/").casefold()
         for site in db.scalars(select(CareerSite)).all()
     }
+    result_urls = {item["url"].rstrip("/").casefold() for item in results}
+    for previous in db.scalars(
+        select(DiscoveredCareerSite).where(DiscoveredCareerSite.dismissed.is_(False))
+    ).all():
+        if previous.url.rstrip("/").casefold() not in result_urls:
+            db.delete(previous)
     for item in results:
         url = item["url"].rstrip("/")
         if url.casefold() in watched_urls:
@@ -223,7 +242,7 @@ def list_companies(db: DatabaseSession) -> list[CareerSite]:
 
 @router.get("/discovery", response_model=CompanyDiscoveryRead)
 def get_company_discovery(db: DatabaseSession) -> CompanyDiscoveryRead:
-    message = "Free local search sends your saved role and location terms to SearXNG's configured search engines. Resume data stays local."
+    message = "Free local search uses your saved roles, locations, and resume-derived experience level. Resume data stays local."
     return _discovery_response(db, message)
 
 
@@ -327,7 +346,7 @@ def get_notification_settings(db: DatabaseSession) -> NotificationSettingsRead:
     saved = db.get(NotificationSettings, 1)
     return NotificationSettingsRead(
         scan_interval_minutes=saved.scan_interval_minutes if saved else settings.scan_interval_minutes,
-        max_notifications_per_day=saved.max_notifications_per_day if saved else 10,
+        max_notifications_per_day=min(saved.max_notifications_per_day, 50) if saved else 10,
     )
 
 
@@ -349,7 +368,7 @@ def save_notification_settings(
 @router.get("/matches", response_model=list[ScannedJobRead])
 def list_matches(
     db: DatabaseSession,
-    limit: int = Query(default=50, ge=1, le=100),
+    limit: int = Query(default=50, ge=1, le=50),
 ) -> list[ScannedJobRead]:
     query = (
         select(JobScanMatch, Job)
@@ -378,7 +397,7 @@ def list_matches(
 def list_notifications(
     db: DatabaseSession,
     unread_only: bool = True,
-    limit: int = Query(default=50, ge=1, le=100),
+    limit: int = Query(default=50, ge=1, le=50),
 ) -> list[JobNotificationRead]:
     query = (
         select(JobNotification, Job, JobScanMatch)
@@ -473,6 +492,9 @@ def scan_company(company_id: int, db: DatabaseSession) -> ScanSummary:
         ))
         preference_data["candidate_years_experience"] = profile.get("years_experience")
         preference_data["candidate_profile"] = profile
+    preference_data["effective_experience_level"] = target_experience_level(
+        profile, preferences.experience_level
+    )
     try:
         postings, skipped_count, warnings = scan_career_site(
             site.url, preference_data, settings.new_job_window_hours,
@@ -489,7 +511,7 @@ def scan_company(company_id: int, db: DatabaseSession) -> ScanSummary:
     created_notifications: list[JobNotification] = []
     day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     saved_settings = db.get(NotificationSettings, 1)
-    daily_limit = saved_settings.max_notifications_per_day if saved_settings else 10
+    daily_limit = min(saved_settings.max_notifications_per_day, 50) if saved_settings else 10
     daily_count = db.scalar(
         select(func.count(JobNotification.id)).where(JobNotification.created_at >= day_start)
     ) or 0

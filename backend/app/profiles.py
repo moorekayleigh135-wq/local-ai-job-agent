@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.experience import infer_experience_level
 from app.models import CandidateProfile, SearchPreferences
 from app.resume_profiles import (
     MAX_RESUME_BYTES,
@@ -29,6 +30,7 @@ def _profile_response(record: CandidateProfile) -> dict:
     return {
         "filename": filename,
         "profile": profile,
+        "inferred_experience_level": infer_experience_level(profile),
         "updated_at": record.updated_at,
     }
 
